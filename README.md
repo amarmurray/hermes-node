@@ -11,7 +11,7 @@ It separates three layers:
 2. **Local wrapper and ops glue**  
    This repo. It handles bootstrap, env loading, wrapper-side JSONL logs, systemd/gateway management helpers, and local submission helpers.
 3. **Future Temporal integration**  
-   A later client of Hermes, preferably via the upstream local-only API server at `http://127.0.0.1:8642/v1`.
+   A later client of Hermes, starting with wrapper CLI ingress and optionally moving to the upstream local-only API server at `http://127.0.0.1:8642/v1`.
 
 ## Upstream Findings
 
@@ -37,6 +37,7 @@ Canonical upstream sources:
 - [Quickstart](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart/)
 - [CLI reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands/)
 - [API server guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server/)
+- [OpenRouter quickstart](https://openrouter.ai/docs/quickstart)
 - [Upstream repo](https://github.com/NousResearch/hermes-agent)
 
 ### Documented upstream install flow
@@ -69,13 +70,46 @@ curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scri
 
 ### What this wrapper preserves
 
-- Upstream code stays in `~/.hermes/hermes-agent`
+- Upstream code stays in a dedicated upstream checkout outside this wrapper repo. The current VPS uses `~/apps/hermes-agent`.
 - Upstream config stays in `~/.hermes/config.yaml`
 - Upstream secrets stay in `~/.hermes/.env`
 - Upstream CLI stays `~/.local/bin/hermes`
 - Upstream service management stays `hermes gateway ...`
 
 This repo does not patch upstream internals.
+
+### Current VPS proof
+
+The current upstream install on the OVH VPS is pinned to:
+
+```text
+v2026.4.13
+1af2e18d408a9dcc2c61d6fc1eef5c6667f8e254
+```
+
+Minimal upstream credential currently configured:
+
+```text
+~/.hermes/.env
+OPENROUTER_API_KEY=...
+```
+
+Current working proof sequence:
+
+```bash
+hermes version
+hermes doctor
+hermes status
+hermes chat --provider openrouter -m 'openai/gpt-oss-20b:free' -Q --max-turns 2 -q "Reply with exactly: ALIVE"
+```
+
+Observed chat proof output:
+
+```text
+ALIVE
+```
+
+This phase deliberately leaves `hermes gateway` stopped and does not enable the upstream local API server as a service.
 
 ## Host Layout
 
@@ -92,8 +126,8 @@ Effective layout after bootstrap:
 ~/apps/hermes-node/              # this wrapper repo
 ~/apps/hermes-node/.env          # wrapper config
 ~/apps/hermes-node/logs/         # wrapper JSONL logs
+~/apps/hermes-agent/             # current VPS upstream runtime checkout
 ~/.hermes/                       # upstream Hermes home
-~/.hermes/hermes-agent/          # upstream repo checkout
 ~/.hermes/config.yaml            # upstream config
 ~/.hermes/.env                   # upstream keys and runtime env
 ~/.local/bin/hermes              # upstream CLI symlink
@@ -127,13 +161,13 @@ cp .env.example .env
 What the bootstrap does:
 
 - installs `uv` if needed
-- clones or updates the upstream repo into `~/.hermes/hermes-agent`
+- clones or updates the upstream repo into `${HERMES_NODE_UPSTREAM_REPO}` (default `~/.hermes/hermes-agent`)
 - creates an upstream Python `3.11` venv with `uv`
 - installs the upstream package with the configured official extras
 - creates the standard `~/.hermes/` directory layout
 - creates `~/.local/bin/hermes`
 - copies the wrapper `.env.example` into `.env` if missing
-- optionally enables the upstream local API server in `~/.hermes/.env`
+- can optionally enable the upstream local API server in `~/.hermes/.env`
 - runs `hermes version`, `hermes status`, and `hermes doctor`
 
 ## Wrapper Commands
@@ -238,6 +272,8 @@ Used by Hermes itself for provider keys and runtime settings such as:
 - `API_SERVER_HOST`
 - `API_SERVER_PORT`
 
+For the current VPS proof, only `OPENROUTER_API_KEY` is set.
+
 ## Logs
 
 Two log surfaces exist on purpose:
@@ -251,9 +287,9 @@ Two log surfaces exist on purpose:
 
 The intended Temporal boundary is:
 
-1. Temporal starts or depends on the upstream Hermes gateway service.
-2. Hermes exposes only the upstream local API server on `127.0.0.1`.
-3. Temporal submits work to `POST /v1/responses`.
+1. Temporal uses wrapper CLI ingress first for the earliest thin integration.
+2. Hermes can later expose only the upstream local API server on `127.0.0.1`.
+3. Temporal then submits work to `POST /v1/responses`.
 4. Temporal watches:
    - `GET /v1/responses/{id}`
    - or `GET /v1/runs/{run_id}/events` when using the run/event path
@@ -278,5 +314,5 @@ The tests only cover the wrapper layer:
 
 ## Notes
 
-- The official CLI was validated locally during development with `hermes version`, `hermes status`, and `hermes doctor`.
-- An actual model call was not executed in this repo because that depends on operator credentials in `~/.hermes/.env`.
+- The official CLI was validated on the VPS with `hermes version`, `hermes doctor`, `hermes status`, and a real OpenRouter-backed `hermes chat` proof call.
+- Gateway and local API service management remain intentionally deferred to the wrapper rollout phase.
