@@ -8,6 +8,7 @@ state/*.db-shm
 state/*.db-wal
 state/*.sqlite3
 state/workspaces/
+state/operator_sessions/
 logs/*.jsonl
 !logs/.gitkeep
 !state/.gitkeep
