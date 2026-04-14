@@ -44,6 +44,9 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(settings.default_model, "openai/gpt-oss-20b:free")
             self.assertEqual(settings.default_max_turns, 6)
             self.assertEqual(settings.poll_interval_seconds, 22)
+            self.assertEqual(settings.max_attempts, 5)
+            self.assertEqual(settings.base_backoff_seconds, 30)
+            self.assertEqual(settings.max_backoff_seconds, 900)
 
 
 if __name__ == "__main__":

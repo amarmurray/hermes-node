@@ -11,16 +11,21 @@ from .models import (
     APPROVAL_NOT_REQUIRED,
     APPROVAL_REJECTED,
     APPROVAL_REQUESTED,
-    TASK_STATE_COMPLETED,
+    DEFAULT_MAX_ATTEMPTS,
+    TASK_STATE_DEFERRED_RATE_LIMIT,
+    TASK_STATE_DONE,
     TASK_STATE_FAILED,
     TASK_STATE_PENDING,
+    TASK_STATE_PENDING_APPROVAL,
     TASK_STATE_REJECTED,
     TASK_STATE_RUNNING,
-    TASK_STATE_WAITING_APPROVAL,
     TaskSubmission,
+    _STATE_RENAMES,
     get_task_profile,
     new_id,
 )
+
+SCHEMA_VERSION = 2
 
 
 def _dump_json(payload: Any) -> str:
@@ -53,9 +58,24 @@ class Ledger:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
+    def _get_schema_version(self) -> int:
+        try:
+            row = self._conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+            return int(row["version"]) if row else 0
+        except sqlite3.OperationalError:
+            return 0
+
+    def _set_schema_version(self, version: int) -> None:
+        self._conn.execute("DELETE FROM schema_version")
+        self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+
     def ensure_schema(self) -> None:
         self._conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
@@ -73,7 +93,10 @@ class Ledger:
                 approval_state TEXT NOT NULL,
                 created_by TEXT NOT NULL,
                 metadata_json TEXT NOT NULL,
-                latest_run_id TEXT
+                latest_run_id TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 5,
+                next_attempt_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS runs (
@@ -126,11 +149,58 @@ class Ledger:
                 note TEXT NOT NULL,
                 data_json TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS cooldowns (
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                cooldown_until TEXT NOT NULL,
+                last_error TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (provider, model)
+            );
             """
         )
         self._conn.commit()
+        self._migrate()
 
-    def create_task(self, submission: TaskSubmission) -> dict[str, Any]:
+    def _migrate(self) -> None:
+        version = self._get_schema_version()
+        if version >= SCHEMA_VERSION:
+            return
+
+        if version < 1:
+            # v0 -> v1: add retry columns (safe if columns already exist from fresh schema)
+            for col, defn in [
+                ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("max_attempts", "INTEGER NOT NULL DEFAULT 5"),
+                ("next_attempt_at", "TEXT"),
+            ]:
+                try:
+                    self._conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {defn}")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
+
+        if version < 2:
+            # v1 -> v2: rename state values in existing rows
+            for old_state, new_state in _STATE_RENAMES.items():
+                self._conn.execute(
+                    "UPDATE tasks SET state = ? WHERE state = ?",
+                    (new_state, old_state),
+                )
+                self._conn.execute(
+                    "UPDATE runs SET state = ? WHERE state = ?",
+                    (new_state, old_state),
+                )
+            # Rename approval states
+            self._conn.execute(
+                "UPDATE tasks SET approval_state = 'requested' WHERE approval_state = 'requested'"
+            )
+
+        self._set_schema_version(SCHEMA_VERSION)
+        self._conn.commit()
+
+    # -- Task creation --
+
+    def create_task(self, submission: TaskSubmission, *, max_attempts: int = DEFAULT_MAX_ATTEMPTS) -> dict[str, Any]:
         profile = get_task_profile(submission.kind)
         if profile.requires_repo_path and not submission.repo_path:
             raise ValueError(f"Task kind '{submission.kind}' requires --repo")
@@ -138,16 +208,17 @@ class Ledger:
         created_at = utcnow()
         task_id = new_id("task")
         approval_state = APPROVAL_REQUESTED if submission.require_approval else APPROVAL_NOT_REQUIRED
-        state = TASK_STATE_WAITING_APPROVAL if submission.require_approval else TASK_STATE_PENDING
+        state = TASK_STATE_PENDING_APPROVAL if submission.require_approval else TASK_STATE_PENDING
         max_turns = submission.max_turns or profile.default_max_turns
         self._conn.execute(
             """
             INSERT INTO tasks (
                 id, created_at, updated_at, title, kind, prompt, state, provider, model,
                 max_turns, repo_path, toolsets_json, require_approval, approval_state,
-                created_by, metadata_json, latest_run_id
+                created_by, metadata_json, latest_run_id,
+                attempt_count, max_attempts, next_attempt_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, NULL)
             """,
             (
                 task_id,
@@ -166,6 +237,7 @@ class Ledger:
                 approval_state,
                 submission.created_by.strip() or "operator",
                 _dump_json(submission.metadata or {}),
+                max_attempts,
             ),
         )
         self.add_event(
@@ -221,7 +293,7 @@ class Ledger:
         )
         task = self.get_task(task_id)
         new_state = task["state"]
-        if status == APPROVAL_GRANTED and task["state"] == TASK_STATE_WAITING_APPROVAL:
+        if status == APPROVAL_GRANTED and task["state"] == TASK_STATE_PENDING_APPROVAL:
             new_state = TASK_STATE_PENDING
         elif status == APPROVAL_REJECTED:
             new_state = TASK_STATE_REJECTED
@@ -256,6 +328,8 @@ class Ledger:
             (task_id, run_id, utcnow(), event_type, level, message, _dump_json(data or {})),
         )
 
+    # -- Run lifecycle --
+
     def begin_run(
         self,
         task_id: str,
@@ -269,7 +343,7 @@ class Ledger:
         task = self.get_task(task_id)
         if task["approval_state"] not in {APPROVAL_NOT_REQUIRED, APPROVAL_GRANTED}:
             raise ValueError(f"Task {task_id} is not approved")
-        if task["state"] not in {TASK_STATE_PENDING, TASK_STATE_WAITING_APPROVAL}:
+        if task["state"] not in {TASK_STATE_PENDING, TASK_STATE_PENDING_APPROVAL, TASK_STATE_DEFERRED_RATE_LIMIT}:
             raise ValueError(f"Task {task_id} is not runnable from state {task['state']}")
 
         run_id = new_id("run")
@@ -321,7 +395,7 @@ class Ledger:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         run = self.get_run(run_id)
         finished_at = utcnow()
-        state = TASK_STATE_COMPLETED if exit_code == 0 else TASK_STATE_FAILED
+        state = TASK_STATE_DONE if exit_code == 0 else TASK_STATE_FAILED
         self._conn.execute(
             """
             UPDATE runs
@@ -345,6 +419,74 @@ class Ledger:
         )
         self._conn.commit()
         return self.get_task(run["task_id"]), self.get_run(run_id)
+
+    # -- Rate-limit deferral --
+
+    def defer_task_rate_limit(
+        self,
+        task_id: str,
+        *,
+        run_id: str | None = None,
+        next_attempt_at: str,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        now = utcnow()
+        self._conn.execute(
+            """
+            UPDATE tasks
+            SET state = ?, updated_at = ?, attempt_count = attempt_count + 1, next_attempt_at = ?
+            WHERE id = ?
+            """,
+            (TASK_STATE_DEFERRED_RATE_LIMIT, now, next_attempt_at, task_id),
+        )
+        self.add_event(
+            task_id,
+            run_id=run_id,
+            event_type="task.deferred_rate_limit",
+            level="warn",
+            message=reason or f"Deferred until {next_attempt_at} due to rate limiting",
+            data={"next_attempt_at": next_attempt_at},
+        )
+        self._conn.commit()
+        return self.get_task(task_id)
+
+    def set_provider_cooldown(
+        self,
+        provider: str,
+        model: str,
+        *,
+        cooldown_until: str,
+        last_error: str = "",
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO cooldowns (provider, model, cooldown_until, last_error)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (provider, model) DO UPDATE
+            SET cooldown_until = excluded.cooldown_until, last_error = excluded.last_error
+            """,
+            (provider, model, cooldown_until, last_error),
+        )
+        self._conn.commit()
+
+    def get_provider_cooldown(self, provider: str, model: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT cooldown_until FROM cooldowns WHERE provider = ? AND model = ?",
+            (provider, model),
+        ).fetchone()
+        if row is None:
+            return None
+        return row["cooldown_until"]
+
+    def active_cooldowns(self) -> list[dict[str, Any]]:
+        now = utcnow()
+        rows = self._conn.execute(
+            "SELECT * FROM cooldowns WHERE cooldown_until > ? ORDER BY cooldown_until ASC",
+            (now,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    # -- Summaries --
 
     def add_summary(
         self,
@@ -373,6 +515,8 @@ class Ledger:
         )
         self._conn.commit()
         return self.get_summary(summary_id)
+
+    # -- Queries --
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         row = self._conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -415,6 +559,8 @@ class Ledger:
         return self._decode_run(row) if row else None
 
     def next_runnable_task(self) -> dict[str, Any] | None:
+        now = utcnow()
+        # First: pending tasks (FIFO)
         row = self._conn.execute(
             """
             SELECT * FROM tasks
@@ -424,7 +570,38 @@ class Ledger:
             """,
             (TASK_STATE_PENDING, APPROVAL_NOT_REQUIRED, APPROVAL_GRANTED),
         ).fetchone()
-        return self._decode_task(row) if row else None
+        if row:
+            task = self._decode_task(row)
+            # Check provider cooldown
+            cooldown = self.get_provider_cooldown(
+                task["provider"], task["model"]
+            )
+            if cooldown is None or cooldown <= now:
+                return task
+            # Provider is cooling down; fall through to check deferred tasks
+
+        # Second: deferred tasks whose next_attempt_at has passed and under max_attempts
+        row = self._conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE state = ?
+              AND next_attempt_at IS NOT NULL
+              AND next_attempt_at <= ?
+              AND attempt_count < max_attempts
+            ORDER BY next_attempt_at ASC
+            LIMIT 1
+            """,
+            (TASK_STATE_DEFERRED_RATE_LIMIT, now),
+        ).fetchone()
+        if row:
+            task = self._decode_task(row)
+            cooldown = self.get_provider_cooldown(
+                task["provider"], task["model"]
+            )
+            if cooldown is None or cooldown <= now:
+                return task
+
+        return None
 
     def task_counts(self) -> dict[str, int]:
         rows = self._conn.execute("SELECT state, COUNT(*) AS total FROM tasks GROUP BY state").fetchall()
@@ -444,6 +621,24 @@ class Ledger:
         ).fetchall()
         return [self._decode_run(row) for row in rows]
 
+    def deferred_tasks(self, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM tasks WHERE state = ? ORDER BY next_attempt_at ASC LIMIT ?",
+            (TASK_STATE_DEFERRED_RATE_LIMIT, limit),
+        ).fetchall()
+        return [self._decode_task(row) for row in rows]
+
+    def recent_rate_limit_events(self, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM events
+            WHERE event_type = 'task.deferred_rate_limit'
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [self._decode_event(row) for row in rows]
+
     def approvals_for_task(self, task_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM approvals WHERE task_id = ? ORDER BY created_at ASC",
@@ -457,6 +652,8 @@ class Ledger:
             (task_id, limit),
         ).fetchall()
         return [self._decode_event(row) for row in rows]
+
+    # -- Decoders --
 
     def _decode_task(self, row: sqlite3.Row) -> dict[str, Any]:
         payload = dict(row)

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import Settings
 from .ledger import Ledger
-from .models import APPROVAL_GRANTED, SUPPORTED_TASK_KINDS, TaskSubmission
+from .models import APPROVAL_GRANTED, SUPPORTED_TASK_KINDS, TASK_STATE_DEFERRED_RATE_LIMIT, TaskSubmission
 from .wrapper import ensure_summary, execute_task, format_status_snapshot, log_wrapper_event, run_command
 
 
@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
                 created_by=args.created_by or os.environ.get("USER", "operator"),
                 max_turns=args.max_turns,
             )
-            task = ledger.create_task(submission)
+            task = ledger.create_task(submission, max_attempts=args.max_attempts or settings.max_attempts)
             log_wrapper_event(
                 settings,
                 "task_submit",
@@ -122,6 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--model")
     submit.add_argument("--repo", help="Repository path for repo_read tasks")
     submit.add_argument("--max-turns", type=int)
+    submit.add_argument("--max-attempts", type=int, default=0, help="Max retry attempts for rate-limit deferral")
     submit.add_argument("--created-by", default="")
     submit.add_argument("--require-approval", action="store_true")
     submit.add_argument("--run-now", action="store_true")
@@ -157,7 +158,7 @@ def _run_loop(settings: Settings, ledger: Ledger, args: argparse.Namespace) -> i
         task_id = args.task_id
         if task_id:
             task = ledger.get_task(task_id)
-            if task["state"] not in {"pending", "waiting_approval"}:
+            if task["state"] not in {"pending", "pending_approval", "deferred_rate_limit"}:
                 message = f"Task {task_id} is in state {task['state']} and will not be re-run."
                 if args.json:
                     print(json.dumps({"task_id": task_id, "message": message}, indent=2))
@@ -181,8 +182,19 @@ def _run_loop(settings: Settings, ledger: Ledger, args: argparse.Namespace) -> i
         _print_execution(outcome, json_mode=args.json)
         executed += 1
         args.task_id = ""
+
+        # Deferred tasks are not failures — continue watching
+        if outcome.state == TASK_STATE_DEFERRED_RATE_LIMIT:
+            if not args.watch:
+                return 0
+            continue
+
         if outcome.exit_code not in (0, None):
-            return 1
+            if not args.watch:
+                return 1
+            # In watch mode, log the failure and keep going
+            continue
+
         if args.limit and executed >= args.limit:
             return 0
         if not args.watch:
@@ -229,18 +241,52 @@ def _print_status(payload: dict[str, object], *, json_mode: bool) -> None:
     print("counts:")
     for state in sorted(counts):
         print(f"  {state}: {counts[state]}")
+
     print()
     print("recent tasks:")
     for task in payload["recent_tasks"]:
-        print(f"  {task['id']} [{task['state']}] {task['kind']} {task['provider'] or '-'} {task['model'] or '-'}")
+        line = f"  {task['id']} [{task['state']}] {task['kind']} {task['provider'] or '-'} {task['model'] or '-'}"
+        if task.get("attempt_count", 0) > 0:
+            line += f" (attempts: {task['attempt_count']})"
+        print(line)
+
     print()
     print("recent runs:")
     for run in payload["recent_runs"]:
         print(f"  {run['id']} [{run['state']}] task={run['task_id']} exit={run['exit_code']}")
+
+    deferred = payload.get("deferred_tasks", [])
+    if deferred:
+        print()
+        print("deferred tasks (rate-limited):")
+        for task in deferred:
+            print(
+                f"  {task['id']} attempt={task['attempt_count']}/{task['max_attempts']}"
+                f" next_at={task.get('next_attempt_at', '?')}"
+            )
+
+    cooldowns = payload.get("active_cooldowns", [])
+    if cooldowns:
+        print()
+        print("active provider cooldowns:")
+        for cd in cooldowns:
+            print(f"  {cd['provider']}/{cd['model']} until {cd['cooldown_until']}")
+
+    rl_events = payload.get("recent_rate_limit_events", [])
+    if rl_events:
+        print()
+        print("recent rate-limit events:")
+        for ev in rl_events:
+            print(f"  [{ev['created_at']}] task={ev['task_id']} {ev['message']}")
+
     task = payload.get("task")
     if task:
         print()
         print(f"task detail: {task['id']} [{task['state']}]")
+        if task.get("attempt_count", 0) > 0:
+            print(f"  attempts: {task['attempt_count']}/{task['max_attempts']}")
+            if task.get("next_attempt_at"):
+                print(f"  next_attempt_at: {task['next_attempt_at']}")
         for approval in payload.get("approvals", []):
             print(f"  approval {approval['status']} by {approval['actor']}: {approval['note']}")
         summary = payload.get("summary")

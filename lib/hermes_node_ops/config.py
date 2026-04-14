@@ -45,6 +45,9 @@ class Settings:
     default_max_turns: int
     poll_interval_seconds: int
     source_tag: str
+    max_attempts: int
+    base_backoff_seconds: int
+    max_backoff_seconds: int
 
     @classmethod
     def load(cls, repo_root: Path | None = None) -> "Settings":
@@ -73,6 +76,9 @@ class Settings:
             default_max_turns=int(_get(merged, "HERMES_NODE_DEFAULT_MAX_TURNS", "4")),
             poll_interval_seconds=int(_get(merged, "HERMES_NODE_POLL_INTERVAL_SECONDS", "15")),
             source_tag=_get(merged, "HERMES_NODE_SOURCE_TAG", "tool"),
+            max_attempts=int(_get(merged, "HERMES_NODE_MAX_ATTEMPTS", "5")),
+            base_backoff_seconds=int(_get(merged, "HERMES_NODE_BASE_BACKOFF_SECONDS", "30")),
+            max_backoff_seconds=int(_get(merged, "HERMES_NODE_MAX_BACKOFF_SECONDS", "900")),
         )
 
     @property

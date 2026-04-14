@@ -7,11 +7,27 @@ from uuid import uuid4
 
 
 TASK_STATE_PENDING = "pending"
-TASK_STATE_WAITING_APPROVAL = "waiting_approval"
+TASK_STATE_PENDING_APPROVAL = "pending_approval"
 TASK_STATE_RUNNING = "running"
-TASK_STATE_COMPLETED = "completed"
+TASK_STATE_DONE = "done"
 TASK_STATE_FAILED = "failed"
 TASK_STATE_REJECTED = "rejected"
+TASK_STATE_DEFERRED_RATE_LIMIT = "deferred_rate_limit"
+
+# Backwards-compat aliases for migration period
+TASK_STATE_WAITING_APPROVAL = TASK_STATE_PENDING_APPROVAL
+TASK_STATE_COMPLETED = TASK_STATE_DONE
+
+# State renames applied during schema migration
+_STATE_RENAMES = {
+    "waiting_approval": "pending_approval",
+    "completed": "done",
+}
+
+# Default retry/backoff policy
+DEFAULT_MAX_ATTEMPTS = 5
+DEFAULT_BASE_BACKOFF_SECONDS = 30
+DEFAULT_MAX_BACKOFF_SECONDS = 900  # 15 minutes
 
 APPROVAL_NOT_REQUIRED = "not_required"
 APPROVAL_REQUESTED = "requested"
