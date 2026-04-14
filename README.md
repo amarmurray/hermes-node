@@ -37,6 +37,37 @@ Not implemented here.
 
 The intended next step is wrapper CLI ingress first, then a local-only API ingress later if needed.
 
+## Roadmap
+
+Stack evolution:
+
+- Upstream Hermes: runtime substrate
+- Hermes-node: constitutional membrane
+- Operator: resident conversational foreman, the human wedge into the substrate
+- Deep Agents: later operator harness, then specialist suboperator harness
+- Temporal: later durable orchestrator and scheduler above hermes-node
+- Executors: Codex, Hermes/OpenRouter, later Claude, later specialist lanes
+
+Near-term roadmap:
+
+1. terminal-first operator on VPS
+2. local OSS model for always-on operator
+3. tool-mediated interaction with hermes-node
+4. Telegram comms wedge
+5. Deep Agents layered into operator
+6. callable specialist suboperators
+7. selectively autonomized specialist suboperators
+8. Temporal above hermes-node
+9. selective activation of broader upstream Hermes capabilities where they reinforce the membrane
+
+Design rules:
+
+- operator thinks through hermes-node, not around it
+- governance before autonomy
+- durable state lives in workspaces, receipts, and session artifacts, not process memory
+- no direct bypass of ledger, approvals, or routing
+- suboperators become bounded organs, not rogue daemons
+
 ## Supported task kinds
 
 `hermes-node` v0 supports only read-first task kinds:
