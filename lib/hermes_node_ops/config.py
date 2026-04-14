@@ -30,6 +30,21 @@ def _get(merged: dict[str, str], key: str, default: str) -> str:
     return os.environ.get(key, merged.get(key, default))
 
 
+def _parse_chat_ids(raw: str) -> tuple[int, ...]:
+    """Parse a comma-separated list of chat IDs into a tuple of ints."""
+    if not raw:
+        return ()
+    result: list[int] = []
+    for piece in raw.replace(" ", "").split(","):
+        if not piece:
+            continue
+        try:
+            result.append(int(piece))
+        except ValueError:
+            continue
+    return tuple(result)
+
+
 @dataclass
 class Settings:
     repo_root: Path
@@ -49,6 +64,10 @@ class Settings:
     base_backoff_seconds: int
     max_backoff_seconds: int
     codex_bin: str
+    telegram_bot_token: str
+    telegram_allowed_chat_ids: tuple[int, ...]
+    telegram_poll_timeout: int
+    telegram_alert_poll_seconds: int
 
     @classmethod
     def load(cls, repo_root: Path | None = None) -> "Settings":
@@ -81,6 +100,16 @@ class Settings:
             base_backoff_seconds=int(_get(merged, "HERMES_NODE_BASE_BACKOFF_SECONDS", "30")),
             max_backoff_seconds=int(_get(merged, "HERMES_NODE_MAX_BACKOFF_SECONDS", "900")),
             codex_bin=_get(merged, "HERMES_NODE_CODEX_BIN", ""),
+            telegram_bot_token=_get(merged, "HERMES_OPERATOR_TELEGRAM_TOKEN", ""),
+            telegram_allowed_chat_ids=_parse_chat_ids(
+                _get(merged, "HERMES_OPERATOR_TELEGRAM_ALLOWED_CHAT_IDS", "")
+            ),
+            telegram_poll_timeout=int(
+                _get(merged, "HERMES_OPERATOR_TELEGRAM_POLL_TIMEOUT", "30")
+            ),
+            telegram_alert_poll_seconds=int(
+                _get(merged, "HERMES_OPERATOR_TELEGRAM_ALERT_POLL_SECONDS", "60")
+            ),
         )
 
     @property
