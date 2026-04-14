@@ -421,12 +421,49 @@ class ToolExecutor:
             snap = format_status_snapshot(ledger, limit=limit)
             return {
                 "counts": snap.get("counts", {}),
-                "deferred_tasks": [self._task_view(t) for t in snap.get("deferred_tasks", [])],
-                "recent_tasks": [self._task_view(t) for t in snap.get("recent_tasks", [])],
-                "recent_runs": [self._run_view(r) for r in snap.get("recent_runs", [])],
+                "deferred_tasks": [
+                    {
+                        "id": t["id"],
+                        "kind": t["kind"],
+                        "state": t["state"],
+                        "approval_state": t.get("approval_state", ""),
+                        "next_attempt_at": t.get("next_attempt_at"),
+                    }
+                    for t in snap.get("deferred_tasks", [])
+                ],
+                "recent_tasks": [
+                    {
+                        "id": t["id"],
+                        "kind": t["kind"],
+                        "state": t["state"],
+                        "approval_state": t.get("approval_state", ""),
+                        "title": t.get("title", ""),
+                        "created_at": t.get("created_at", ""),
+                        "latest_run_id": t.get("latest_run_id", ""),
+                    }
+                    for t in snap.get("recent_tasks", [])
+                ],
+                "recent_runs": [
+                    {
+                        "id": r["id"],
+                        "task_id": r["task_id"],
+                        "state": r["state"],
+                        "executor": r.get("executor", ""),
+                        "provider": r.get("provider", ""),
+                        "model": r.get("model", ""),
+                        "exit_code": r.get("exit_code"),
+                        "finished_at": r.get("finished_at", ""),
+                    }
+                    for r in snap.get("recent_runs", [])
+                ],
                 "active_cooldowns": snap.get("active_cooldowns", []),
                 "recent_rate_limit_events": [
-                    self._event_view(e) for e in snap.get("recent_rate_limit_events", [])
+                    {
+                        "task_id": e.get("task_id", ""),
+                        "created_at": e.get("created_at", ""),
+                        "message": self._preview(e.get("message", ""), 120),
+                    }
+                    for e in snap.get("recent_rate_limit_events", [])
                 ],
             }
 

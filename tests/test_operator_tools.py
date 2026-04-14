@@ -99,10 +99,22 @@ class ToolDispatchTests(unittest.TestCase):
 
         result = executor.dispatch("get_queue_status", {"limit": 3})
         data = json.loads(result)
+        self.assertLess(len(result), 2500)
         self.assertGreaterEqual(len(data["recent_runs"]), 1)
         run_view = data["recent_runs"][0]
-        self.assertIn("stdout_preview", run_view)
-        self.assertIn("stderr_preview", run_view)
+        self.assertEqual(
+            {
+                "id",
+                "task_id",
+                "state",
+                "executor",
+                "provider",
+                "model",
+                "exit_code",
+                "finished_at",
+            },
+            set(run_view),
+        )
         self.assertNotIn("stdout", run_view)
         self.assertNotIn("stderr", run_view)
         self.assertNotIn("command", run_view)
