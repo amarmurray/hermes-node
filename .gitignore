@@ -4,6 +4,8 @@
 __pycache__/
 *.pyc
 state/*.db
+state/*.db-shm
+state/*.db-wal
 state/*.sqlite3
 logs/*.jsonl
 !logs/.gitkeep
