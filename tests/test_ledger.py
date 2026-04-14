@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -34,6 +35,7 @@ class LedgerTests(unittest.TestCase):
                 )
                 self.assertEqual(task["state"], "pending")
                 self.assertEqual(task["approval_state"], "not_required")
+                self.assertTrue(task["workspace_dir"].endswith(f"/workspaces/{task['id']}"))
                 approvals = ledger.approvals_for_task(task["id"])
                 self.assertEqual(len(approvals), 1)
                 self.assertEqual(approvals[0]["status"], "not_required")
@@ -228,6 +230,81 @@ class RateLimitEventTests(unittest.TestCase):
 
 
 class SchemaMigrationTests(unittest.TestCase):
+    def test_v3_to_v4_migration_adds_workspace_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "legacy.db"
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                """
+                CREATE TABLE schema_version (
+                    version INTEGER NOT NULL
+                );
+                INSERT INTO schema_version (version) VALUES (3);
+
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    max_turns INTEGER NOT NULL,
+                    repo_path TEXT NOT NULL,
+                    toolsets_json TEXT NOT NULL,
+                    require_approval INTEGER NOT NULL DEFAULT 0,
+                    approval_state TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    latest_run_id TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 5,
+                    next_attempt_at TEXT
+                );
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO tasks (
+                    id, created_at, updated_at, title, kind, prompt, state, provider, model,
+                    max_turns, repo_path, toolsets_json, require_approval, approval_state,
+                    created_by, metadata_json, latest_run_id, attempt_count, max_attempts, next_attempt_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "task_legacy",
+                    utcnow(),
+                    utcnow(),
+                    "legacy",
+                    "summary",
+                    "hello",
+                    TASK_STATE_PENDING,
+                    "openrouter",
+                    "openai/gpt-oss-20b:free",
+                    2,
+                    "",
+                    "[]",
+                    0,
+                    "not_required",
+                    "operator",
+                    "{}",
+                    "",
+                    0,
+                    5,
+                    None,
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            with Ledger(db_path) as ledger:
+                task = ledger.get_task("task_legacy")
+                self.assertTrue(task["workspace_dir"].endswith("/workspaces/task_legacy"))
+                self.assertEqual(ledger._get_schema_version(), 4)
+
     def test_migration_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "ledger.db"
@@ -237,6 +314,7 @@ class SchemaMigrationTests(unittest.TestCase):
             with Ledger(db_path) as ledger:
                 task2 = ledger.get_task(task["id"])
                 self.assertEqual(task2["state"], task["state"])
+                self.assertEqual(task2["workspace_dir"], task["workspace_dir"])
 
 
 if __name__ == "__main__":

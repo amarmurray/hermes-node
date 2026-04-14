@@ -23,6 +23,7 @@ from .models import (
     TASK_STATE_FAILED,
     TASK_STATE_PENDING,
     TASK_STATE_PENDING_APPROVAL,
+    TASK_STATE_RUNNING,
     get_task_profile,
 )
 from .routing import (
@@ -31,6 +32,13 @@ from .routing import (
     RISK_BRANCH_WRITE,
     get_route,
     resolve_executor,
+)
+from .workspaces import (
+    ensure_workspace,
+    write_input_artifact,
+    write_run_output,
+    write_run_receipt,
+    write_worktree_metadata,
 )
 
 
@@ -97,6 +105,88 @@ def available_executors(settings: Settings) -> set[str]:
     if codex_available(settings):
         avail.add(EXECUTOR_CODEX)
     return avail
+
+
+def ensure_task_workspace(settings: Settings, task: dict[str, Any]) -> Path:
+    workspace_dir = task.get("workspace_dir", "")
+    workspace_path = ensure_workspace(settings.repo_root, task["id"], workspace_dir=workspace_dir)
+    write_input_artifact(
+        settings.repo_root,
+        task["id"],
+        kind=task["kind"],
+        prompt=task["prompt"],
+        provider=task.get("provider", ""),
+        model=task.get("model", ""),
+        repo_path=task.get("repo_path", ""),
+        metadata=task.get("metadata", {}),
+        created_at=task.get("created_at", ""),
+        workspace_dir=workspace_dir,
+    )
+    if task.get("repo_path"):
+        profile = get_task_profile(task["kind"])
+        write_worktree_metadata(
+            settings.repo_root,
+            task["id"],
+            repo_path=task["repo_path"],
+            worktree_path=task["repo_path"],
+            extra={"uses_upstream_worktree": profile.use_worktree},
+            workspace_dir=workspace_dir,
+        )
+    return workspace_path
+
+
+def write_run_artifacts(
+    settings: Settings,
+    task: dict[str, Any],
+    run: dict[str, Any],
+    *,
+    stdout: str,
+    stderr: str,
+    exit_code: int | None,
+    duration_ms: int | None,
+    executor: str,
+    provider: str,
+    model: str,
+    task_state: str,
+    hermes_session_id: str = "",
+    branch: str = "",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    workspace_dir = task.get("workspace_dir", "")
+    write_run_output(
+        settings.repo_root,
+        task["id"],
+        run["id"],
+        stdout=stdout,
+        stderr=stderr,
+        workspace_dir=workspace_dir,
+    )
+    receipt_extra = {
+        "run_state": run.get("state", ""),
+        "task_state": task_state,
+    }
+    if extra:
+        receipt_extra.update(extra)
+    write_run_receipt(
+        settings.repo_root,
+        task["id"],
+        run["id"],
+        exit_code=exit_code,
+        duration_ms=duration_ms,
+        executor=executor,
+        provider=provider,
+        model=model,
+        state=task_state,
+        created_at=run.get("created_at", ""),
+        started_at=run.get("started_at", ""),
+        finished_at=run.get("finished_at", ""),
+        working_dir=run.get("working_dir", ""),
+        command=run.get("command", []),
+        hermes_session_id=hermes_session_id,
+        branch=branch,
+        extra=receipt_extra,
+        workspace_dir=workspace_dir,
+    )
 
 
 # -- Hermes chat executor --
@@ -211,6 +301,8 @@ def execute_task(
     if task["state"] not in {TASK_STATE_PENDING, TASK_STATE_PENDING_APPROVAL, TASK_STATE_DEFERRED_RATE_LIMIT}:
         raise ValueError(f"Task {task_id} is not runnable from state {task['state']}")
 
+    ensure_task_workspace(settings, task)
+
     # Resolve executor via routing policy
     route = get_route(task["kind"])
     avail = available_executors(settings)
@@ -260,6 +352,7 @@ def _execute_via_hermes(
     """Run a task through the upstream Hermes chat executor."""
     task_id = task["id"]
     command, provider, model, max_turns, workdir = build_task_command(settings, task=task)
+    uses_upstream_worktree = "--worktree" in command
     task, run = ledger.begin_run(
         task_id,
         command=command,
@@ -280,6 +373,29 @@ def _execute_via_hermes(
         model=model,
         working_dir=workdir,
     )
+    write_run_artifacts(
+        settings,
+        task,
+        run,
+        stdout="",
+        stderr="",
+        exit_code=None,
+        duration_ms=None,
+        executor=executor,
+        provider=provider,
+        model=model,
+        task_state=TASK_STATE_RUNNING,
+        extra={"uses_upstream_worktree": uses_upstream_worktree},
+    )
+    if task["repo_path"]:
+        write_worktree_metadata(
+            settings.repo_root,
+            task_id,
+            repo_path=task["repo_path"],
+            worktree_path=workdir,
+            extra={"uses_upstream_worktree": uses_upstream_worktree},
+            workspace_dir=task.get("workspace_dir", ""),
+        )
     result = command_runner(
         settings,
         command,
@@ -306,6 +422,21 @@ def _execute_via_hermes(
         stderr=result.stderr,
         duration_ms=result.duration_ms,
         hermes_session_id=session_id,
+    )
+    write_run_artifacts(
+        settings,
+        task,
+        run,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        exit_code=result.exit_code,
+        duration_ms=result.duration_ms,
+        executor=executor,
+        provider=provider,
+        model=model,
+        task_state=task["state"],
+        hermes_session_id=session_id,
+        extra={"uses_upstream_worktree": uses_upstream_worktree},
     )
     summary = summarize_command_result(task, run)
     ledger.add_summary(
@@ -376,6 +507,29 @@ def _execute_via_codex(
         branch=branch,
         repo_path=repo_path,
     )
+    write_run_artifacts(
+        settings,
+        task_obj,
+        run,
+        stdout="",
+        stderr="",
+        exit_code=None,
+        duration_ms=None,
+        executor=EXECUTOR_CODEX,
+        provider=provider,
+        model=model,
+        task_state=TASK_STATE_RUNNING,
+        branch=branch,
+    )
+    write_worktree_metadata(
+        settings.repo_root,
+        task_id,
+        repo_path=repo_path,
+        branch=branch,
+        worktree_path=repo_path,
+        extra={"executor": EXECUTOR_CODEX, "writable": writable},
+        workspace_dir=task_obj.get("workspace_dir", ""),
+    )
 
     try:
         codex_result = run_codex(
@@ -390,12 +544,26 @@ def _execute_via_codex(
     except Exception as exc:
         # Codex call itself failed (e.g. missing API key, binary crash)
         error_msg = f"Codex executor error: {exc}"
-        ledger.finish_run(
+        task_obj, run = ledger.finish_run(
             run["id"],
             exit_code=127,
             stdout="",
             stderr=error_msg,
             duration_ms=0,
+        )
+        write_run_artifacts(
+            settings,
+            task_obj,
+            run,
+            stdout="",
+            stderr=error_msg,
+            exit_code=127,
+            duration_ms=0,
+            executor=EXECUTOR_CODEX,
+            provider=provider,
+            model=model,
+            task_state=task_obj["state"],
+            branch=branch,
         )
         ledger.add_event(
             task_id, run_id=run["id"],
@@ -419,7 +587,7 @@ def _execute_via_codex(
         )
         return _handle_rate_limit(
             settings, ledger, task_obj, run, cr, "",
-            executor=EXECUTOR_CODEX, provider=provider, model=model,
+            executor=EXECUTOR_CODEX, provider=provider, model=model, branch=branch,
         )
 
     task_obj, run = ledger.finish_run(
@@ -428,6 +596,20 @@ def _execute_via_codex(
         stdout=codex_result.stdout,
         stderr=codex_result.stderr,
         duration_ms=codex_result.duration_ms,
+    )
+    write_run_artifacts(
+        settings,
+        task_obj,
+        run,
+        stdout=codex_result.stdout,
+        stderr=codex_result.stderr,
+        exit_code=codex_result.exit_code,
+        duration_ms=codex_result.duration_ms,
+        executor=EXECUTOR_CODEX,
+        provider=provider,
+        model=model,
+        task_state=task_obj["state"],
+        branch=branch,
     )
     summary = summarize_command_result(task_obj, run)
     metadata: dict[str, Any] = {
@@ -472,12 +654,13 @@ def _handle_rate_limit(
     executor: str,
     provider: str,
     model: str,
+    branch: str = "",
 ) -> ExecutionOutcome:
     task_id = task["id"]
     attempt_count = task.get("attempt_count", 0)
     max_attempts = task.get("max_attempts", settings.max_attempts)
 
-    ledger.finish_run(
+    _, finished_run = ledger.finish_run(
         run["id"],
         exit_code=result.exit_code,
         stdout=result.stdout,
@@ -492,6 +675,7 @@ def _handle_rate_limit(
             (TASK_STATE_FAILED, utcnow(), task_id),
         )
         ledger._conn.commit()
+        task_after = ledger.get_task(task_id)
         ledger.add_event(
             task_id, run_id=run["id"],
             event_type="task.max_attempts_exceeded", level="error",
@@ -504,6 +688,21 @@ def _handle_rate_limit(
         )
         summary = f"Task {task_id} permanently failed after {max_attempts} rate-limit retries."
         ledger.add_summary(task_id, run_id=run["id"], content=summary, metadata={"rate_limited": True})
+        write_run_artifacts(
+            settings,
+            task_after,
+            finished_run,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.exit_code,
+            duration_ms=result.duration_ms,
+            executor=executor,
+            provider=provider,
+            model=model,
+            task_state=task_after["state"],
+            hermes_session_id=session_id,
+            branch=branch,
+        )
         return ExecutionOutcome(
             task_id=task_id, run_id=run["id"], state=TASK_STATE_FAILED,
             exit_code=result.exit_code, summary=summary, executor=executor,
@@ -514,8 +713,23 @@ def _handle_rate_limit(
         attempt_count, settings.base_backoff_seconds, settings.max_backoff_seconds,
     )
     reason = f"Rate limited (attempt {attempt_count + 1}/{max_attempts}). Next retry after {next_at}."
-    ledger.defer_task_rate_limit(task_id, run_id=run["id"], next_attempt_at=next_at, reason=reason)
+    task_after = ledger.defer_task_rate_limit(task_id, run_id=run["id"], next_attempt_at=next_at, reason=reason)
     ledger.set_provider_cooldown(provider, model, cooldown_until=next_at, last_error=result.stderr[:500])
+    write_run_artifacts(
+        settings,
+        task_after,
+        finished_run,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        exit_code=result.exit_code,
+        duration_ms=result.duration_ms,
+        executor=executor,
+        provider=provider,
+        model=model,
+        task_state=task_after["state"],
+        hermes_session_id=session_id,
+        branch=branch,
+    )
     log_wrapper_event(
         settings, "task_run.deferred_rate_limit",
         task_id=task_id, run_id=run["id"], executor=executor,

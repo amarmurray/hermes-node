@@ -25,7 +25,7 @@ from .models import (
     new_id,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _dump_json(payload: Any) -> str:
@@ -69,6 +69,9 @@ class Ledger:
         self._conn.execute("DELETE FROM schema_version")
         self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
 
+    def _default_workspace_dir(self, task_id: str) -> str:
+        return str((self.db_path.parent / "workspaces" / task_id).resolve())
+
     def ensure_schema(self) -> None:
         self._conn.executescript(
             """
@@ -93,6 +96,7 @@ class Ledger:
                 approval_state TEXT NOT NULL,
                 created_by TEXT NOT NULL,
                 metadata_json TEXT NOT NULL,
+                workspace_dir TEXT NOT NULL DEFAULT '',
                 latest_run_id TEXT,
                 attempt_count INTEGER NOT NULL DEFAULT 0,
                 max_attempts INTEGER NOT NULL DEFAULT 5,
@@ -205,6 +209,22 @@ class Ledger:
             except sqlite3.OperationalError:
                 pass  # column already exists
 
+        if version < 4:
+            try:
+                self._conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT ''"
+                )
+            except sqlite3.OperationalError:
+                pass
+            rows = self._conn.execute("SELECT id, workspace_dir FROM tasks").fetchall()
+            for row in rows:
+                if row["workspace_dir"]:
+                    continue
+                self._conn.execute(
+                    "UPDATE tasks SET workspace_dir = ? WHERE id = ?",
+                    (self._default_workspace_dir(row["id"]), row["id"]),
+                )
+
         self._set_schema_version(SCHEMA_VERSION)
         self._conn.commit()
 
@@ -217,6 +237,7 @@ class Ledger:
 
         created_at = utcnow()
         task_id = new_id("task")
+        workspace_dir = self._default_workspace_dir(task_id)
         approval_state = APPROVAL_REQUESTED if submission.require_approval else APPROVAL_NOT_REQUIRED
         state = TASK_STATE_PENDING_APPROVAL if submission.require_approval else TASK_STATE_PENDING
         max_turns = submission.max_turns or profile.default_max_turns
@@ -225,10 +246,10 @@ class Ledger:
             INSERT INTO tasks (
                 id, created_at, updated_at, title, kind, prompt, state, provider, model,
                 max_turns, repo_path, toolsets_json, require_approval, approval_state,
-                created_by, metadata_json, latest_run_id,
+                created_by, metadata_json, workspace_dir, latest_run_id,
                 attempt_count, max_attempts, next_attempt_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, NULL)
             """,
             (
                 task_id,
@@ -247,6 +268,7 @@ class Ledger:
                 approval_state,
                 submission.created_by.strip() or "operator",
                 _dump_json(submission.metadata or {}),
+                workspace_dir,
                 max_attempts,
             ),
         )

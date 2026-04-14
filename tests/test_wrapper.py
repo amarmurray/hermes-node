@@ -75,12 +75,13 @@ class WrapperCommandTests(unittest.TestCase):
 
     def test_execute_task_records_run_and_summary(self) -> None:
         settings = self.make_settings()
+        expected_stdout = "\n╭─ ⚕ Hermes ──────────────────╮\nALIVE\n\nsession_id: test_session\n"
 
         def fake_runner(settings, command, **kwargs):
             return CommandResult(
                 command=command,
                 exit_code=0,
-                stdout="\n╭─ ⚕ Hermes ──────────────────╮\nALIVE\n\nsession_id: test_session\n",
+                stdout=expected_stdout,
                 stderr="",
                 duration_ms=25,
             )
@@ -95,6 +96,13 @@ class WrapperCommandTests(unittest.TestCase):
         self.assertEqual(outcome.summary, "ALIVE")
         self.assertEqual(summary["content"], "ALIVE")
         self.assertEqual(run["hermes_session_id"], "test_session")
+        workspace = Path(task["workspace_dir"])
+        self.assertTrue((workspace / "input.md").exists())
+        self.assertEqual((workspace / "runs" / run["id"] / "stdout.txt").read_text(encoding="utf-8"), expected_stdout)
+        receipt = json.loads((workspace / "runs" / run["id"] / "receipt.json").read_text(encoding="utf-8"))
+        self.assertEqual(receipt["executor"], EXECUTOR_HERMES_CHAT)
+        self.assertEqual(receipt["task_state"], TASK_STATE_DONE)
+        self.assertEqual(receipt["run_state"], TASK_STATE_DONE)
 
     def test_summary_helpers_strip_banner_lines(self) -> None:
         raw = "\n╭─ ⚕ Hermes ──────────────────╮\nALIVE\nsession_id: abc123\n"
@@ -202,6 +210,13 @@ class ExecuteTaskRateLimitTests(unittest.TestCase):
             # Verify provider cooldown was set
             cd = ledger.get_provider_cooldown("openrouter", "openai/gpt-oss-20b:free")
             self.assertIsNotNone(cd)
+            run = ledger.latest_run_for_task(task["id"])
+
+        workspace = Path(task["workspace_dir"])
+        receipt = json.loads((workspace / "runs" / run["id"] / "receipt.json").read_text(encoding="utf-8"))
+        self.assertEqual(receipt["task_state"], TASK_STATE_DEFERRED_RATE_LIMIT)
+        self.assertEqual(receipt["run_state"], TASK_STATE_FAILED)
+        self.assertIn("HTTP 429", (workspace / "runs" / run["id"] / "stderr.txt").read_text(encoding="utf-8"))
 
     def test_429_exhausts_retries_then_fails(self) -> None:
         settings = self.make_settings()

@@ -14,11 +14,13 @@ from .routing import format_route_table, get_route, is_approval_required, is_kin
 from .wrapper import (
     available_executors,
     ensure_summary,
+    ensure_task_workspace,
     execute_task,
     format_status_snapshot,
     log_wrapper_event,
     run_command,
 )
+from .workspaces import list_workspaces, read_workspace_manifest
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -58,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_turns=args.max_turns,
             )
             task = ledger.create_task(submission, max_attempts=args.max_attempts or settings.max_attempts)
+            ensure_task_workspace(settings, task)
             log_wrapper_event(
                 settings,
                 "task_submit",
@@ -115,6 +118,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(summary["content"])
             return 0
 
+        if args.command == "workspace":
+            return _handle_workspace(settings, ledger, args)
+
     parser.print_help()
     return 1
 
@@ -162,6 +168,11 @@ def build_parser() -> argparse.ArgumentParser:
     summarize_parser.add_argument("--task-id", default="")
     summarize_parser.add_argument("--run-id", default="")
     summarize_parser.add_argument("--json", action="store_true")
+
+    workspace_parser = subparsers.add_parser("workspace", help="Inspect durable task workspace artifacts")
+    workspace_parser.add_argument("--task-id", default="")
+    workspace_parser.add_argument("--limit", type=int, default=10)
+    workspace_parser.add_argument("--json", action="store_true")
 
     route_parser = subparsers.add_parser("route", help="Inspect routing policy and executor availability")
     route_parser.add_argument("--kind", default="", help="Show route for a specific task kind")
@@ -212,6 +223,52 @@ def _handle_route(settings: Settings, args: argparse.Namespace) -> int:
         print(f"  [{marker}] {r['kind']:22s} {r['risk_class']:14s} -> {r['default_executor']}{approval}")
         if r["fallback_executors"]:
             print(f"      fallback: {', '.join(r['fallback_executors'])}")
+    return 0
+
+
+def _handle_workspace(settings: Settings, ledger: Ledger, args: argparse.Namespace) -> int:
+    if args.task_id:
+        task: dict[str, object] | None
+        try:
+            task = ledger.get_task(args.task_id)
+            manifest = read_workspace_manifest(
+                settings.repo_root,
+                args.task_id,
+                workspace_dir=task.get("workspace_dir", ""),
+            )
+        except KeyError:
+            task = None
+            manifest = read_workspace_manifest(settings.repo_root, args.task_id)
+
+        payload: dict[str, object] = {"manifest": manifest}
+        if task is not None:
+            payload["task"] = task
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return 0
+        _print_workspace_manifest(payload)
+        return 0 if manifest.get("exists") else 1
+
+    workspace_ids = list_workspaces(settings.repo_root)
+    manifests = [read_workspace_manifest(settings.repo_root, task_id) for task_id in workspace_ids[: args.limit]]
+    payload = {
+        "workspace_root": str(settings.repo_root / "state" / "workspaces"),
+        "total": len(workspace_ids),
+        "workspaces": manifests,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    print(f"workspace root: {payload['workspace_root']}")
+    print(f"total: {payload['total']}")
+    for manifest in manifests:
+        run_count = len(manifest.get("runs", []))
+        print(
+            f"  {manifest['task_id']}: runs={run_count}"
+            f" input={'yes' if manifest.get('has_input') else 'no'}"
+            f" worktree={'yes' if manifest.get('has_worktree_meta') else 'no'}"
+        )
     return 0
 
 
@@ -372,6 +429,50 @@ def _emit_result(stdout: str, stderr: str) -> None:
         sys.stderr.write(stderr)
         if not stderr.endswith("\n"):
             sys.stderr.write("\n")
+
+
+def _print_workspace_manifest(payload: dict[str, object]) -> None:
+    manifest = payload["manifest"]
+    task = payload.get("task")
+
+    if task:
+        print(f"task: {task['id']} [{task['state']}]")
+    else:
+        print(f"task: {manifest['task_id']}")
+    print(f"workspace: {manifest['workspace_path']}")
+    if not manifest.get("exists"):
+        print("workspace not found")
+        return
+
+    print(f"input.md: {'present' if manifest.get('has_input') else 'missing'}")
+    print(f"worktree.json: {'present' if manifest.get('has_worktree_meta') else 'missing'}")
+
+    worktree = manifest.get("worktree")
+    if worktree:
+        print("worktree:")
+        print(f"  repo_path: {worktree.get('repo_path', '')}")
+        if worktree.get("branch"):
+            print(f"  branch: {worktree['branch']}")
+        if worktree.get("worktree_path"):
+            print(f"  worktree_path: {worktree['worktree_path']}")
+
+    runs = manifest.get("runs", [])
+    print("runs:")
+    if not runs:
+        print("  none")
+    for run in runs:
+        receipt = run.get("receipt") or {}
+        state = receipt.get("state", "?")
+        exit_code = receipt.get("exit_code")
+        executor = receipt.get("executor", "")
+        print(f"  {run['run_id']} [{state}] executor={executor or '-'} exit={exit_code}")
+
+    notes = manifest.get("notes", [])
+    print("notes:")
+    if not notes:
+        print("  none")
+    for note_name in notes:
+        print(f"  {note_name}")
 
 
 if __name__ == "__main__":

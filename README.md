@@ -1,4 +1,4 @@
-# hermes-node v0
+# hermes-node v0.3
 
 `hermes-node` is a thin operator wrapper around the already-working upstream [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) install on the VPS.
 
@@ -6,8 +6,9 @@ It does not reimplement Hermes internals. The wrapper owns:
 
 1. local operator ingress
 2. a SQLite run ledger
-3. JSONL wrapper logs
-4. queue execution and approval gates
+3. durable task workspaces
+4. JSONL wrapper logs
+5. queue execution and approval gates
 
 Upstream Hermes remains the execution runtime.
 
@@ -27,6 +28,7 @@ Upstream Hermes remains the execution runtime.
 - repo: `~/apps/hermes-node`
 - CLI: `./bin/hermes-node`
 - ledger: `state/hermes-node.db`
+- workspaces: `state/workspaces/{task_id}/`
 - wrapper logs: `logs/hermes-node.jsonl`
 
 ### 3. future Temporal ingress
@@ -63,7 +65,9 @@ The local SQLite ledger persists:
 - `summaries`
 - `approvals`
 
-The wrapper also writes structured JSONL records to `logs/hermes-node.jsonl`.
+Each task row also persists `workspace_dir`.
+
+The wrapper also writes structured JSONL records to `logs/hermes-node.jsonl` and durable per-task artifacts under `state/workspaces/`.
 
 ## File tree
 
@@ -74,15 +78,20 @@ The wrapper also writes structured JSONL records to `logs/hermes-node.jsonl`.
 ├── bin/
 │   └── hermes-node
 ├── docs/
+│   ├── operator-ops.md
+│   ├── routing-policy.md
 │   └── upstream-notes.md
 ├── lib/
 │   └── hermes_node_ops/
 │       ├── __init__.py
 │       ├── cli.py
 │       ├── config.py
+│       ├── codex.py
 │       ├── jsonl.py
 │       ├── ledger.py
 │       ├── models.py
+│       ├── routing.py
+│       ├── workspaces.py
 │       └── wrapper.py
 ├── logs/
 │   └── .gitkeep
@@ -93,8 +102,11 @@ The wrapper also writes structured JSONL records to `logs/hermes-node.jsonl`.
 ├── systemd/
 │   └── hermes-node.service
 └── tests/
+    ├── test_codex.py
     ├── test_config.py
     ├── test_ledger.py
+    ├── test_routing.py
+    ├── test_workspaces.py
     └── test_wrapper.py
 ```
 
@@ -154,7 +166,7 @@ Run one queued task, or stay in a worker loop.
 
 Approval note:
 
-- `submit --require-approval` queues a task in `waiting_approval`
+- `submit --require-approval` queues a task in `pending_approval`
 - `run --approve task_...` records a granted approval and can immediately execute that task
 
 ### status
@@ -175,6 +187,30 @@ Show the latest stored summary for a task or run.
 ./bin/hermes-node summarize
 ./bin/hermes-node summarize --task-id task_...
 ./bin/hermes-node summarize --run-id run_...
+```
+
+### workspace
+
+Inspect the durable workspace for a task, or list known workspaces.
+
+```bash
+./bin/hermes-node workspace
+./bin/hermes-node workspace --task-id task_...
+./bin/hermes-node workspace --task-id task_... --json
+```
+
+Each task workspace contains:
+
+```text
+state/workspaces/{task_id}/
+├── input.md
+├── notes/
+├── runs/
+│   └── {run_id}/
+│       ├── receipt.json
+│       ├── stderr.txt
+│       └── stdout.txt
+└── worktree.json
 ```
 
 ## systemd unit
@@ -233,6 +269,7 @@ bash -n scripts/bootstrap_ubuntu_2404.sh
 ./bin/hermes-node submit --kind summary --query "Reply with exactly: ALIVE"
 ./bin/hermes-node run
 ./bin/hermes-node summarize
+./bin/hermes-node workspace --task-id task_...
 ```
 
 Expected shape:
