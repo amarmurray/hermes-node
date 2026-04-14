@@ -18,7 +18,7 @@ The source of truth is `lib/hermes_node_ops/routing.py`.
 | Executor | Backend | Notes |
 |---|---|---|
 | `hermes_chat` | Upstream Hermes CLI (`hermes chat`) via OpenRouter | Always available |
-| `codex` | OpenAI Codex CLI (`codex`) | Requires install + OPENAI_API_KEY |
+| `codex` | OpenAI Codex CLI (`codex`) | Requires install plus usable auth: `OPENAI_API_KEY`, cached `codex login`, or `OPENROUTER_API_KEY` via OpenRouter-compatible provider config |
 
 ## Route table
 
@@ -37,7 +37,7 @@ The source of truth is `lib/hermes_node_ops/routing.py`.
 | Default executor unavailable, no fallback | Fail with legible error |
 | 429 / rate limit | Defer with exponential backoff (same as v0.1) |
 | Timeout | Treated as non-zero exit code failure |
-| Missing API key for Codex | Codex reports unavailable, fallback or fail |
+| Missing usable auth for Codex | Codex reports unavailable, fallback or fail |
 | Budget breach | Not yet implemented; placeholder for Temporal phase |
 | Approval not granted | Task stays in `pending_approval` until approved or rejected |
 
@@ -61,8 +61,11 @@ To enable the Codex executor on the VPS:
 # Install Codex CLI
 npm install -g @openai/codex
 
-# Set API key in wrapper .env
+# Option A: set an OpenAI API key in wrapper .env
 echo 'OPENAI_API_KEY=sk-...' >> ~/apps/hermes-node/.env
+
+# Option B: keep OPENROUTER_API_KEY in ~/.hermes/.env and let hermes-node
+# use a local OpenRouter-backed custom Codex provider automatically.
 
 # Verify
 hermes-node route --kind repo_read

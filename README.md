@@ -130,6 +130,12 @@ HERMES_NODE_DEFAULT_MAX_TURNS=4
 HERMES_NODE_POLL_INTERVAL_SECONDS=15
 ```
 
+Codex auth options:
+
+- `OPENAI_API_KEY` may live in `~/apps/hermes-node/.env`
+- or a cached `codex login` can be used directly
+- or `OPENROUTER_API_KEY` can stay in `~/.hermes/.env`; the wrapper will map Codex onto OpenRouter's OpenAI-compatible base URL for read-only repo tasks
+
 ## CLI
 
 ### submit

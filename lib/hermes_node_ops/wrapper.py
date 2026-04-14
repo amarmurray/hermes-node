@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import random
 import re
@@ -99,10 +100,13 @@ def log_wrapper_event(settings: Settings, action: str, **payload: Any) -> None:
     )
 
 
-def available_executors(settings: Settings) -> set[str]:
+def available_executors(settings: Settings, task: dict[str, Any] | None = None) -> set[str]:
     """Return the set of executors that are currently available."""
     avail = {EXECUTOR_HERMES_CHAT}  # always available via upstream hermes
-    if codex_available(settings):
+    requested_provider = ""
+    if task is not None:
+        requested_provider = str(task.get("provider", "") or "")
+    if codex_available(settings, requested_provider=requested_provider):
         avail.add(EXECUTOR_CODEX)
     return avail
 
@@ -305,7 +309,7 @@ def execute_task(
 
     # Resolve executor via routing policy
     route = get_route(task["kind"])
-    avail = available_executors(settings)
+    avail = available_executors(settings, task=task)
     executor = resolve_executor(task["kind"], available_executors=avail)
 
     if executor is None:
@@ -481,15 +485,12 @@ def _execute_via_codex(
 
     writable = route.risk_class == RISK_BRANCH_WRITE
     branch = make_branch_name(task_id) if writable else ""
-    provider = task["provider"] or "codex"
-    model = task["model"] or "codex"
-
-    # Build a command representation for the ledger
-    cmd_repr = ["codex", "--approval-mode", "auto-edit" if writable else "suggest", task["prompt"]]
+    provider = task["provider"] or settings.default_provider or "codex"
+    model = task["model"] or settings.default_model or "codex"
 
     task_obj, run = ledger.begin_run(
         task_id,
-        command=cmd_repr,
+        command=[],
         working_dir=repo_path,
         provider=provider,
         model=model,
@@ -536,11 +537,19 @@ def _execute_via_codex(
             settings,
             prompt=task["prompt"],
             repo_path=repo_path,
+            provider=provider,
+            model=model,
             task_id=task_id,
             run_id=run["id"],
             writable=writable,
             branch=branch,
         )
+        ledger._conn.execute(
+            "UPDATE runs SET command = ? WHERE id = ?",
+            (json.dumps(codex_result.command), run["id"]),
+        )
+        ledger._conn.commit()
+        run = ledger.get_run(run["id"])
     except Exception as exc:
         # Codex call itself failed (e.g. missing API key, binary crash)
         error_msg = f"Codex executor error: {exc}"
@@ -610,11 +619,14 @@ def _execute_via_codex(
         model=model,
         task_state=task_obj["state"],
         branch=branch,
+        extra={"auth_mode": codex_result.auth_mode, "provider_id": codex_result.provider_id},
     )
     summary = summarize_command_result(task_obj, run)
     metadata: dict[str, Any] = {
         "exit_code": codex_result.exit_code,
         "executor": EXECUTOR_CODEX,
+        "auth_mode": codex_result.auth_mode,
+        "provider_id": codex_result.provider_id,
     }
     if branch:
         metadata["branch"] = branch
@@ -793,6 +805,17 @@ def extract_session_id(stdout: str) -> str:
 
 
 def extract_response_text(stdout: str) -> str:
+    text = ANSI_RE.sub("", stdout).replace("\r", "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    codex_indices = [idx for idx, line in enumerate(lines) if line == "codex"]
+    if codex_indices:
+        assistant_lines: list[str] = []
+        for line in lines[codex_indices[-1] + 1:]:
+            if line == "tokens used":
+                break
+            assistant_lines.append(line)
+        if assistant_lines:
+            return "\n".join(assistant_lines).strip()
     return clean_console_text(stdout)
 
 
@@ -802,6 +825,34 @@ def clean_console_text(text: str) -> str:
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
+            continue
+        if line == "--------":
+            continue
+        if line in {"user", "codex"}:
+            continue
+        if line.startswith("Reading additional input from stdin"):
+            continue
+        if line.startswith("OpenAI Codex v"):
+            continue
+        if line.startswith("workdir:"):
+            continue
+        if line.startswith("model:"):
+            continue
+        if line.startswith("provider:"):
+            continue
+        if line.startswith("approval:"):
+            continue
+        if line.startswith("sandbox:"):
+            continue
+        if line.startswith("reasoning effort:"):
+            continue
+        if line.startswith("reasoning summaries:"):
+            continue
+        if line.startswith("session id:"):
+            continue
+        if line.startswith("warning: Codex could not find bubblewrap"):
+            continue
+        if line == "tokens used":
             continue
         if line.startswith("session_id:"):
             continue

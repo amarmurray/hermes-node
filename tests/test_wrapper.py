@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
@@ -116,6 +117,37 @@ class WrapperCommandTests(unittest.TestCase):
             "ALIVE",
         )
 
+    def test_summary_helpers_strip_codex_console_metadata(self) -> None:
+        raw = """
+OpenAI Codex v0.120.0 (research preview)
+--------
+workdir: /tmp/repo
+model: openai/gpt-oss-20b:free
+provider: openrouter_custom
+approval: never
+sandbox: read-only
+reasoning effort: none
+reasoning summaries: none
+session id: 123
+--------
+user
+Reply with exactly: CODEX_OK
+warning: Codex could not find bubblewrap on PATH.
+codex
+CODEX_OK
+tokens used
+8,800
+CODEX_OK
+"""
+        self.assertEqual(clean_console_text(raw), "Reply with exactly: CODEX_OK\nCODEX_OK\n8,800\nCODEX_OK")
+        self.assertEqual(
+            summarize_command_result(
+                {"id": "task_2"},
+                {"stdout": raw, "stderr": "", "state": "done", "exit_code": 0},
+            ),
+            "CODEX_OK",
+        )
+
     def test_append_jsonl_writes_single_line(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "log.jsonl"
@@ -123,6 +155,12 @@ class WrapperCommandTests(unittest.TestCase):
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
             self.assertEqual(json.loads(lines[0])["action"], "test")
+
+    def test_available_executors_respects_task_provider_specific_auth(self) -> None:
+        settings = self.make_settings()
+        task = {"provider": "openrouter"}
+        with patch("hermes_node_ops.wrapper.codex_available", return_value=False):
+            self.assertEqual(available_executors(settings, task=task), {EXECUTOR_HERMES_CHAT})
 
 
 class RateLimitDetectionTests(unittest.TestCase):

@@ -11,3 +11,4 @@ state/workspaces/
 logs/*.jsonl
 !logs/.gitkeep
 !state/.gitkeep
+.worktrees/
