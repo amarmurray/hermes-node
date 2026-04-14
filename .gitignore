@@ -1,5 +1,8 @@
 .env
 __pycache__/
 *.pyc
+state/*.db
+state/*.sqlite3
 logs/*.jsonl
 !logs/.gitkeep
+!state/.gitkeep

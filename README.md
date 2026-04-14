@@ -1,302 +1,248 @@
-# Hermes Node Ops Wrapper
+# hermes-node v0
 
-This repository is a thin operational wrapper around the upstream [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) runtime.
+`hermes-node` is a thin operator wrapper around the already-working upstream [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) install on the VPS.
 
-It does **not** ship a custom Hermes clone.
+It does not reimplement Hermes internals. The wrapper owns:
 
-It separates three layers:
+1. local operator ingress
+2. a SQLite run ledger
+3. JSONL wrapper logs
+4. queue execution and approval gates
 
-1. **Upstream Hermes runtime / CLI**  
-   Installed from the upstream repo into the official layout under `~/.hermes/` and invoked through the official `hermes` CLI.
-2. **Local wrapper and ops glue**  
-   This repo. It handles bootstrap, env loading, wrapper-side JSONL logs, systemd/gateway management helpers, and local submission helpers.
-3. **Future Temporal integration**  
-   A later client of Hermes, starting with wrapper CLI ingress and optionally moving to the upstream local-only API server at `http://127.0.0.1:8642/v1`.
+Upstream Hermes remains the execution runtime.
 
-## Upstream Findings
+## Separation
 
-Inspected on **April 13, 2026** against upstream commit `2773b18b`.
+### 1. Upstream Hermes runtime
 
-Deployed VPS runtime currently validated at exact upstream commit:
+- pinned on the VPS at tag `v2026.4.13`
+- pinned SHA `1af2e18d408a9dcc2c61d6fc1eef5c6667f8e254`
+- repo: `~/apps/hermes-agent`
+- home: `~/.hermes`
+- credential surface: `~/.hermes/.env`
+- execution backend: `~/.local/bin/hermes`
 
-```text
-1af2e18d408a9dcc2c61d6fc1eef5c6667f8e254
-```
+### 2. local hermes-node wrapper
 
-Deployed VPS runtime is now pinned to upstream release tag:
+- repo: `~/apps/hermes-node`
+- CLI: `./bin/hermes-node`
+- ledger: `state/hermes-node.db`
+- wrapper logs: `logs/hermes-node.jsonl`
 
-```text
-v2026.4.13
-```
+### 3. future Temporal ingress
 
-GitHub's latest upstream release at the time of sync was **Hermes Agent v0.9.0**, published on **April 13, 2026** at **18:52:41 UTC**.
+Not implemented here.
 
-Canonical upstream sources:
+The intended next step is wrapper CLI ingress first, then a local-only API ingress later if needed.
 
-- [Installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation/)
-- [Quickstart](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart/)
-- [CLI reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands/)
-- [API server guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server/)
-- [OpenRouter quickstart](https://openrouter.ai/docs/quickstart)
-- [Upstream repo](https://github.com/NousResearch/hermes-agent)
+## Supported task kinds
 
-### Documented upstream install flow
+`hermes-node` v0 supports only read-first task kinds:
 
-The upstream manual install for Linux is:
+- `summary`
+- `research`
+- `repo_read`
 
-```bash
-git clone --recurse-submodules https://github.com/NousResearch/hermes-agent.git
-cd hermes-agent
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv venv venv --python 3.11
-export VIRTUAL_ENV="$(pwd)/venv"
-uv pip install -e "."
-mkdir -p ~/.hermes/{cron,sessions,logs,memories,skills,pairing,hooks,image_cache,audio_cache,whatsapp/session}
-cp cli-config.yaml.example ~/.hermes/config.yaml
-touch ~/.hermes/.env
-mkdir -p ~/.local/bin
-ln -sf "$(pwd)/venv/bin/hermes" ~/.local/bin/hermes
-hermes version
-hermes doctor
-hermes status
-hermes chat -q "Hello! What tools do you have available?"
-```
+It does not support `repo_write` or shell mutation task classes by default.
 
-The upstream quick installer is:
+Guardrails:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
-```
+- `summary` uses non-destructive toolsets only
+- `research` uses web-oriented toolsets only
+- `repo_read` runs with the upstream `file` toolset and adds a strict read-only prompt preamble
+- `repo_read` uses `--worktree` automatically when the target path looks like a git checkout
+- no wrapper path enables `--yolo`
 
-### What this wrapper preserves
+## Ledger model
 
-- Upstream code stays in a dedicated upstream checkout outside this wrapper repo. The current VPS uses `~/apps/hermes-agent`.
-- Upstream config stays in `~/.hermes/config.yaml`
-- Upstream secrets stay in `~/.hermes/.env`
-- Upstream CLI stays `~/.local/bin/hermes`
-- Upstream service management stays `hermes gateway ...`
+The local SQLite ledger persists:
 
-This repo does not patch upstream internals.
+- `tasks`
+- `runs`
+- `events`
+- `summaries`
+- `approvals`
 
-### Current VPS proof
+The wrapper also writes structured JSONL records to `logs/hermes-node.jsonl`.
 
-The current upstream install on the OVH VPS is pinned to:
+## File tree
 
 ```text
-v2026.4.13
-1af2e18d408a9dcc2c61d6fc1eef5c6667f8e254
+.
+├── .env.example
+├── README.md
+├── bin/
+│   └── hermes-node
+├── docs/
+│   └── upstream-notes.md
+├── lib/
+│   └── hermes_node_ops/
+│       ├── __init__.py
+│       ├── cli.py
+│       ├── config.py
+│       ├── jsonl.py
+│       ├── ledger.py
+│       ├── models.py
+│       └── wrapper.py
+├── logs/
+│   └── .gitkeep
+├── scripts/
+│   └── bootstrap_ubuntu_2404.sh
+├── state/
+│   └── .gitkeep
+├── systemd/
+│   └── hermes-node.service
+└── tests/
+    ├── test_config.py
+    ├── test_ledger.py
+    └── test_wrapper.py
 ```
 
-Minimal upstream credential currently configured:
+## Configuration
+
+Wrapper configuration lives in `~/apps/hermes-node/.env`.
+
+Upstream Hermes secrets remain in `~/.hermes/.env`.
+
+Important wrapper settings:
+
+```dotenv
+HERMES_NODE_UPSTREAM_HOME=~/.hermes
+HERMES_NODE_UPSTREAM_REPO=~/apps/hermes-agent
+HERMES_NODE_HERMES_BIN=~/.local/bin/hermes
+HERMES_NODE_DB_PATH=state/hermes-node.db
+HERMES_NODE_LOG_JSONL=logs/hermes-node.jsonl
+HERMES_NODE_DEFAULT_PROVIDER=openrouter
+HERMES_NODE_DEFAULT_MODEL=openai/gpt-oss-20b:free
+HERMES_NODE_DEFAULT_MAX_TURNS=4
+HERMES_NODE_POLL_INTERVAL_SECONDS=15
+```
+
+## CLI
+
+### submit
+
+Queue a task in the local ledger.
+
+```bash
+./bin/hermes-node submit --kind summary --query "Reply with exactly: ALIVE"
+./bin/hermes-node submit --kind research --query "Summarize the latest OpenRouter quickstart flow"
+./bin/hermes-node submit --kind repo_read --repo ~/apps/hermes-node --query "Describe the ledger schema"
+./bin/hermes-node submit --kind research --query "Review this plan" --require-approval
+```
+
+Optional overrides:
+
+- `--provider`
+- `--model`
+- `--max-turns`
+- `--title`
+- `--created-by`
+- `--run-now`
+- `--json`
+
+### run
+
+Run one queued task, or stay in a worker loop.
+
+```bash
+./bin/hermes-node run
+./bin/hermes-node run --task-id task_...
+./bin/hermes-node run --watch --poll-interval 15
+./bin/hermes-node run --approve task_... --actor ubuntu
+```
+
+Approval note:
+
+- `submit --require-approval` queues a task in `waiting_approval`
+- `run --approve task_...` records a granted approval and can immediately execute that task
+
+### status
+
+Inspect queue state, recent runs, approvals, and task details.
+
+```bash
+./bin/hermes-node status
+./bin/hermes-node status --task-id task_...
+./bin/hermes-node status --json
+```
+
+### summarize
+
+Show the latest stored summary for a task or run.
+
+```bash
+./bin/hermes-node summarize
+./bin/hermes-node summarize --task-id task_...
+./bin/hermes-node summarize --run-id run_...
+```
+
+## systemd unit
+
+The worker unit lives in [systemd/hermes-node.service](/Users/amarmurray/Documents/autodev/ops/hermes-node/systemd/hermes-node.service).
+
+It runs:
 
 ```text
-~/.hermes/.env
-OPENROUTER_API_KEY=...
+/home/ubuntu/apps/hermes-node/bin/hermes-node run --watch --poll-interval 15
 ```
 
-Current working proof sequence:
+Install on the VPS:
 
 ```bash
-hermes version
-hermes doctor
-hermes status
-hermes chat --provider openrouter -m 'openai/gpt-oss-20b:free' -Q --max-turns 2 -q "Reply with exactly: ALIVE"
+cd ~/apps/hermes-node
+sudo install -m 0644 systemd/hermes-node.service /etc/systemd/system/hermes-node.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now hermes-node.service
+sudo systemctl status hermes-node.service
 ```
 
-Observed chat proof output:
+This service does not expose a public port.
 
-```text
-ALIVE
-```
+## Migration / bootstrap on the VPS
 
-This phase deliberately leaves `hermes gateway` stopped and does not enable the upstream local API server as a service.
+This wrapper assumes upstream Hermes is already installed and working.
 
-## Host Layout
+Current VPS facts:
 
-Target VPS:
+- upstream Hermes repo: `~/apps/hermes-agent`
+- upstream Hermes home: `~/.hermes`
+- OpenRouter credential already configured in `~/.hermes/.env`
 
-- Ubuntu `24.04.x`
-- user: `ubuntu`
-- build path: `~/apps/hermes-node`
-- private-first, Tailscale/SSH only
-
-Effective layout after bootstrap:
-
-```text
-~/apps/hermes-node/              # this wrapper repo
-~/apps/hermes-node/.env          # wrapper config
-~/apps/hermes-node/logs/         # wrapper JSONL logs
-~/apps/hermes-agent/             # current VPS upstream runtime checkout
-~/.hermes/                       # upstream Hermes home
-~/.hermes/config.yaml            # upstream config
-~/.hermes/.env                   # upstream keys and runtime env
-~/.local/bin/hermes              # upstream CLI symlink
-```
-
-## Why the Bootstrap Uses `.[messaging]` by Default
-
-The wrapper is intended to manage the upstream gateway service and leave a clean path for the upstream local API server later. The upstream API server relies on gateway-side HTTP dependencies. To stay inside upstream-supported install shapes, the bootstrap defaults to the official extra:
+Bootstrap the wrapper:
 
 ```bash
-uv pip install -e ".[messaging]"
-```
-
-If you want the thinnest possible CLI-only runtime, set:
-
-```bash
-HERMES_NODE_UPSTREAM_INSTALL_SPEC=.
-```
-
-before running bootstrap.
-
-## Bootstrap on Ubuntu 24.04
-
-From `~/apps/hermes-node`:
-
-```bash
+cd ~/apps
+git clone https://github.com/amarmurray/hermes-node.git
+cd ~/apps/hermes-node
 cp .env.example .env
 ./scripts/bootstrap_ubuntu_2404.sh
 ```
 
-What the bootstrap does:
+The bootstrap script does not reinstall upstream Hermes. It verifies the upstream binary, prepares wrapper state directories, and optionally installs the worker unit.
 
-- installs `uv` if needed
-- clones or updates the upstream repo into `${HERMES_NODE_UPSTREAM_REPO}` (default `~/.hermes/hermes-agent`)
-- creates an upstream Python `3.11` venv with `uv`
-- installs the upstream package with the configured official extras
-- creates the standard `~/.hermes/` directory layout
-- creates `~/.local/bin/hermes`
-- copies the wrapper `.env.example` into `.env` if missing
-- can optionally enable the upstream local API server in `~/.hermes/.env`
-- runs `hermes version`, `hermes status`, and `hermes doctor`
+## Exact VPS verification commands
 
-## Wrapper Commands
-
-The wrapper entrypoint is:
+Run these on the VPS after pulling this repo:
 
 ```bash
-./bin/hermes-node
+cd ~/apps/hermes-node
+python3 -m unittest discover -s tests -v
+bash -n scripts/bootstrap_ubuntu_2404.sh
+./bin/hermes-node status
+./bin/hermes-node submit --kind summary --query "Reply with exactly: ALIVE"
+./bin/hermes-node run
+./bin/hermes-node summarize
 ```
 
-### Pass through to upstream CLI
+Expected shape:
 
-```bash
-./bin/hermes-node upstream version
-./bin/hermes-node upstream model
-./bin/hermes-node upstream doctor
-```
+- `status` shows the local ledger counts
+- `submit` creates a `task_...`
+- `run` creates a `run_...` and calls upstream `hermes chat`
+- `summarize` prints the stored summary from the completed run
 
-### Smoke-check the official CLI
-
-```bash
-./bin/hermes-node smoke
-```
-
-This runs:
-
-- `hermes version`
-- `hermes status`
-- `hermes doctor`
-
-### Manage the upstream gateway service
-
-Default documented mode is the upstream **user service**:
-
-```bash
-./bin/hermes-node service install
-./bin/hermes-node service start
-./bin/hermes-node service status
-./bin/hermes-node service restart
-./bin/hermes-node service stop
-```
-
-For a boot-time **system service** running as `ubuntu`:
-
-```bash
-./bin/hermes-node service install --system
-./bin/hermes-node service start --system
-./bin/hermes-node service status --system
-```
-
-The wrapper delegates to upstream commands:
-
-- user scope: `hermes gateway <action>`
-- system scope: `sudo hermes gateway <action> --system [--run-as-user ubuntu]`
-
-### One-shot local task submission
-
-This uses the official upstream CLI one-shot mode:
-
-```bash
-./bin/hermes-node submit --query "Summarize the last 10 log lines"
-./bin/hermes-node submit --query "Review the repo" --provider openrouter --model anthropic/claude-sonnet-4.6
-./bin/hermes-node submit --query "Return only JSON" --quiet
-```
-
-The wrapper delegates to:
-
-```bash
-hermes chat -q "..." -Q
-```
-
-### Local API helper
-
-If the upstream API server is enabled and the gateway is running:
-
-```bash
-./bin/hermes-node api-health
-./bin/hermes-node api-submit --input "Check the latest gateway log errors"
-./bin/hermes-node api-submit --input "Continue" --conversation ops-loop
-```
-
-This calls the upstream local-only OpenAI-compatible API:
-
-- `GET /health`
-- `POST /v1/responses`
-
-## Environment Files
-
-There are two separate env surfaces:
-
-### Wrapper env: `~/apps/hermes-node/.env`
-
-Used only by this repo for pathing, service defaults, and wrapper logging.
-
-### Upstream env: `~/.hermes/.env`
-
-Used by Hermes itself for provider keys and runtime settings such as:
-
-- `OPENROUTER_API_KEY`
-- `API_SERVER_ENABLED`
-- `API_SERVER_KEY`
-- `API_SERVER_HOST`
-- `API_SERVER_PORT`
-
-For the current VPS proof, only `OPENROUTER_API_KEY` is set.
-
-## Logs
-
-Two log surfaces exist on purpose:
-
-1. **Upstream logs** in `~/.hermes/logs/` and journald  
-   These belong to Hermes itself.
-2. **Wrapper logs** in `~/apps/hermes-node/logs/hermes-node.jsonl`  
-   These record wrapper invocations, command dispatch, service actions, and API helper calls.
-
-## Future Temporal Integration
-
-The intended Temporal boundary is:
-
-1. Temporal uses wrapper CLI ingress first for the earliest thin integration.
-2. Hermes can later expose only the upstream local API server on `127.0.0.1`.
-3. Temporal then submits work to `POST /v1/responses`.
-4. Temporal watches:
-   - `GET /v1/responses/{id}`
-   - or `GET /v1/runs/{run_id}/events` when using the run/event path
-
-This keeps Temporal out of Hermes internals. No private fork, no patched scheduler, no wrapper-owned run loop.
-
-## Tests
+## Local development tests
 
 Run:
 
@@ -304,15 +250,16 @@ Run:
 python3 -m unittest discover -s tests -v
 ```
 
-The tests only cover the wrapper layer:
+The test suite covers:
 
-- env loading
-- service command construction
-- submit command construction
-- JSONL logging
-- API request construction
+- env/config loading
+- ledger creation and approvals
+- upstream command construction
+- run execution bookkeeping
+- summary extraction
 
 ## Notes
 
-- The official CLI was validated on the VPS with `hermes version`, `hermes doctor`, `hermes status`, and a real OpenRouter-backed `hermes chat` proof call.
-- Gateway and local API service management remain intentionally deferred to the wrapper rollout phase.
+- Upstream proof-of-life remains recorded in [docs/upstream-notes.md](/Users/amarmurray/Documents/autodev/ops/hermes-node/docs/upstream-notes.md).
+- `hermes-node` uses the upstream Hermes CLI as its only execution backend.
+- Temporal is intentionally out of scope for this v0.

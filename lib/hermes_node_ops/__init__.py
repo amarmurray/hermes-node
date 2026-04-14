@@ -1,1 +1,5 @@
-"""Thin ops wrapper around upstream hermes-agent."""
+"""hermes-node wrapper around pinned upstream hermes-agent."""
+
+__all__ = ["__version__"]
+
+__version__ = "0.1.0"

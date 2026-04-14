@@ -1,0 +1,21 @@
+[Unit]
+Description=hermes-node queue worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/apps/hermes-node
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/ubuntu/apps/hermes-node/.env
+ExecStart=/home/ubuntu/apps/hermes-node/bin/hermes-node run --watch --poll-interval 15
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
