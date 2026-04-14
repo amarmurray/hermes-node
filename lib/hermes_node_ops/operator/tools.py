@@ -338,24 +338,114 @@ class ToolExecutor:
         except Exception as exc:
             return json.dumps({"error": str(exc)})
 
+    @staticmethod
+    def _preview(text: str, limit: int = 240) -> str:
+        text = text.strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3] + "..."
+
+    def _task_view(self, task: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": task["id"],
+            "kind": task["kind"],
+            "state": task["state"],
+            "approval_state": task.get("approval_state", ""),
+            "title": task.get("title", ""),
+            "created_by": task.get("created_by", ""),
+            "provider": task.get("provider", ""),
+            "model": task.get("model", ""),
+            "repo_path": task.get("repo_path", ""),
+            "latest_run_id": task.get("latest_run_id", ""),
+            "attempt_count": task.get("attempt_count", 0),
+            "next_attempt_at": task.get("next_attempt_at"),
+            "created_at": task.get("created_at", ""),
+            "updated_at": task.get("updated_at", ""),
+            "prompt_preview": self._preview(task.get("prompt", ""), 180),
+        }
+
+    def _run_view(self, run: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": run["id"],
+            "task_id": run["task_id"],
+            "state": run["state"],
+            "executor": run.get("executor", ""),
+            "provider": run.get("provider", ""),
+            "model": run.get("model", ""),
+            "exit_code": run.get("exit_code"),
+            "duration_ms": run.get("duration_ms"),
+            "created_at": run.get("created_at", ""),
+            "started_at": run.get("started_at", ""),
+            "finished_at": run.get("finished_at", ""),
+            "working_dir": run.get("working_dir", ""),
+            "stdout_preview": self._preview(run.get("stdout", ""), 180),
+            "stderr_preview": self._preview(run.get("stderr", ""), 180),
+        }
+
+    def _summary_view(self, summary: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": summary["id"],
+            "task_id": summary["task_id"],
+            "run_id": summary.get("run_id", ""),
+            "summary_type": summary.get("summary_type", ""),
+            "created_at": summary.get("created_at", ""),
+            "content": self._preview(summary.get("content", ""), 500),
+            "metadata": summary.get("metadata", {}),
+        }
+
+    def _approval_view(self, approval: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": approval["id"],
+            "task_id": approval["task_id"],
+            "status": approval.get("status", ""),
+            "actor": approval.get("actor", ""),
+            "decided_at": approval.get("decided_at", ""),
+            "note": self._preview(approval.get("note", ""), 180),
+        }
+
+    def _event_view(self, event: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": event["id"],
+            "task_id": event.get("task_id", ""),
+            "run_id": event.get("run_id"),
+            "event_type": event.get("event_type", ""),
+            "level": event.get("level", ""),
+            "created_at": event.get("created_at", ""),
+            "message": self._preview(event.get("message", ""), 220),
+        }
+
     # -- Hermes-node tools --
 
     def _tool_get_queue_status(self, limit: int = 5) -> dict[str, Any]:
         with Ledger(self.settings.ledger_db) as ledger:
-            return format_status_snapshot(ledger, limit=limit)
+            snap = format_status_snapshot(ledger, limit=limit)
+            return {
+                "counts": snap.get("counts", {}),
+                "deferred_tasks": [self._task_view(t) for t in snap.get("deferred_tasks", [])],
+                "recent_tasks": [self._task_view(t) for t in snap.get("recent_tasks", [])],
+                "recent_runs": [self._run_view(r) for r in snap.get("recent_runs", [])],
+                "active_cooldowns": snap.get("active_cooldowns", []),
+                "recent_rate_limit_events": [
+                    self._event_view(e) for e in snap.get("recent_rate_limit_events", [])
+                ],
+            }
 
     def _tool_get_task_status(self, task_id: str) -> dict[str, Any]:
         with Ledger(self.settings.ledger_db) as ledger:
             task = ledger.get_task(task_id)
-            result: dict[str, Any] = {"task": task}
-            result["approvals"] = ledger.approvals_for_task(task_id)
+            result: dict[str, Any] = {"task": self._task_view(task)}
+            result["approvals"] = [
+                self._approval_view(a) for a in ledger.approvals_for_task(task_id)
+            ]
             summary = ledger.latest_summary(task_id=task_id)
             if summary:
-                result["latest_summary"] = summary
+                result["latest_summary"] = self._summary_view(summary)
             run = ledger.latest_run_for_task(task_id)
             if run:
-                result["latest_run"] = run
-            result["events"] = ledger.events_for_task(task_id, limit=10)
+                result["latest_run"] = self._run_view(run)
+            result["events"] = [
+                self._event_view(e) for e in ledger.events_for_task(task_id, limit=10)
+            ]
             return result
 
     def _tool_submit_task(
@@ -413,11 +503,11 @@ class ToolExecutor:
 
     def _tool_list_recent_tasks(self, limit: int = 10) -> list[dict[str, Any]]:
         with Ledger(self.settings.ledger_db) as ledger:
-            return ledger.recent_tasks(limit=limit)
+            return [self._task_view(t) for t in ledger.recent_tasks(limit=limit)]
 
     def _tool_list_recent_runs(self, limit: int = 10) -> list[dict[str, Any]]:
         with Ledger(self.settings.ledger_db) as ledger:
-            return ledger.recent_runs(limit=limit)
+            return [self._run_view(r) for r in ledger.recent_runs(limit=limit)]
 
     def _tool_inspect_workspace(self, task_id: str) -> dict[str, Any]:
         return read_workspace_manifest(self.repo_root, task_id)

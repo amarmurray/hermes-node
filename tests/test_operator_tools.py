@@ -75,6 +75,38 @@ class ToolDispatchTests(unittest.TestCase):
         data = json.loads(result)
         self.assertIn("counts", data)
 
+    def test_get_queue_status_omits_heavy_run_payloads(self) -> None:
+        settings = _make_settings()
+        executor = ToolExecutor(settings, settings.repo_root)
+        with Ledger(settings.ledger_db) as ledger:
+            task = ledger.create_task(TaskSubmission(kind="summary", prompt="Test prompt from operator"))
+            _, run = ledger.begin_run(
+                task["id"],
+                command=["echo", "hello"],
+                working_dir=str(settings.repo_root),
+                provider="openrouter",
+                model="openai/gpt-oss-20b:free",
+                max_turns=2,
+                executor="hermes_chat",
+            )
+            ledger.finish_run(
+                run["id"],
+                exit_code=0,
+                stdout="x" * 1000,
+                stderr="y" * 1000,
+                duration_ms=10,
+            )
+
+        result = executor.dispatch("get_queue_status", {"limit": 3})
+        data = json.loads(result)
+        self.assertGreaterEqual(len(data["recent_runs"]), 1)
+        run_view = data["recent_runs"][0]
+        self.assertIn("stdout_preview", run_view)
+        self.assertIn("stderr_preview", run_view)
+        self.assertNotIn("stdout", run_view)
+        self.assertNotIn("stderr", run_view)
+        self.assertNotIn("command", run_view)
+
     def test_submit_task_and_get_status(self) -> None:
         settings = _make_settings()
         executor = ToolExecutor(settings, settings.repo_root)
