@@ -551,6 +551,44 @@ class ToolExecutor:
         return {"saved": True, "note": note}
 
 
-def get_tool_definitions() -> list[dict[str, Any]]:
-    """Return the tool definitions for the chat backend."""
-    return TOOL_DEFINITIONS
+def _compact_property_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in ("type", "enum", "items", "default"):
+        if key in schema:
+            compact[key] = schema[key]
+    return compact
+
+
+def _compact_tool_definition(tool: dict[str, Any]) -> dict[str, Any]:
+    function = tool["function"]
+    params = function.get("parameters", {})
+    properties = params.get("properties", {})
+    compact_properties = {
+        name: _compact_property_schema(prop)
+        for name, prop in properties.items()
+    }
+    compact_params: dict[str, Any] = {
+        "type": params.get("type", "object"),
+        "properties": compact_properties,
+        "required": params.get("required", []),
+    }
+    return {
+        "type": tool.get("type", "function"),
+        "function": {
+            "name": function["name"],
+            "description": function["name"],
+            "parameters": compact_params,
+        },
+    }
+
+
+def get_tool_definitions(*, compact: bool = True) -> list[dict[str, Any]]:
+    """Return tool definitions sized for the operator backend.
+
+    The compact form is the default because the always-on local operator
+    uses a small OSS model over Ollama on a VPS. Keeping tool schemas
+    tight materially improves tool-call reliability.
+    """
+    if not compact:
+        return TOOL_DEFINITIONS
+    return [_compact_tool_definition(tool) for tool in TOOL_DEFINITIONS]

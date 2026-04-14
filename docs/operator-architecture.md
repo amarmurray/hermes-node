@@ -18,6 +18,33 @@ Human
   -> reports to human
 ```
 
+## Stack map
+
+- Upstream Hermes: runtime substrate
+- Hermes-node: constitutional membrane
+- Operator: resident conversational foreman and wedge into the substrate
+- Deep Agents: later harness for the operator, then bounded specialist suboperators
+- Temporal: later durable orchestrator above hermes-node
+- Executors under hermes-node: Codex, Hermes/OpenRouter, later Claude, later specialist lanes
+
+Near-term sequence:
+
+1. terminal-first operator on the VPS
+2. local OSS model as the always-on foreman
+3. tool-mediated interaction through hermes-node, never around it
+4. Telegram later as another ingress wedge into the same operator
+5. Deep Agents later as operator harness
+6. specialist suboperators later, first callable then selectively autonomized
+7. Temporal later above hermes-node
+8. broader upstream Hermes capabilities only when they reinforce the membrane
+
+Design rules:
+
+- governance propagates downward before autonomy does
+- durable state belongs in workspaces, receipts, sessions, and notes, not live process memory
+- upstream Hermes capabilities should be wrapped by hermes-node policy before autonomous use
+- specialist suboperators should become bounded, receipt-emitting, policy-constrained organs
+
 ## What the operator is
 
 - A foreman, not a coder
@@ -106,19 +133,19 @@ HERMES_OPERATOR_API_KEY=
 
 ```bash
 # Start a chat session
-hermes-operator chat
+./bin/hermes-operator chat
 
 # With specific model
-hermes-operator chat --model qwen3:1.7b --base-url http://localhost:11434
+./bin/hermes-operator chat --model qwen3:1.7b --base-url http://localhost:11434
 
 # Resume a previous session
-hermes-operator chat --resume session_20260414_120000_abc123
+./bin/hermes-operator chat --resume session_20260414_120000_abc123
 
 # List sessions
-hermes-operator sessions
+./bin/hermes-operator sessions
 
 # View a session thread
-hermes-operator thread session_20260414_120000_abc123
+./bin/hermes-operator thread session_20260414_120000_abc123
 ```
 
 ## VPS setup
@@ -135,7 +162,7 @@ curl http://localhost:11434/v1/models
 
 # Start the operator
 cd ~/apps/hermes-node
-bin/hermes-operator chat
+./bin/hermes-operator chat
 ```
 
 ## Design principles

@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 from hermes_node_ops.config import Settings
 from hermes_node_ops.ledger import Ledger
 from hermes_node_ops.models import TaskSubmission
-from hermes_node_ops.operator.tools import ToolExecutor, get_tool_definitions
+from hermes_node_ops.operator.tools import TOOL_DEFINITIONS, ToolExecutor, get_tool_definitions
 
 
 def _make_settings() -> Settings:
@@ -49,6 +49,15 @@ class ToolDefinitionsTests(unittest.TestCase):
             "save_note",
         }
         self.assertTrue(expected.issubset(names), f"Missing tools: {expected - names}")
+
+    def test_default_tool_definitions_are_compact(self) -> None:
+        compact_defs = get_tool_definitions()
+        verbose_defs = TOOL_DEFINITIONS
+        self.assertLess(len(json.dumps(compact_defs)), len(json.dumps(verbose_defs)))
+        for td in compact_defs:
+            self.assertIn("function", td)
+            self.assertIn("name", td["function"])
+            self.assertIn("parameters", td["function"])
 
 
 class ToolDispatchTests(unittest.TestCase):

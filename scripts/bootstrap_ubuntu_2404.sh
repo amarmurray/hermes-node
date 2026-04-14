@@ -36,6 +36,7 @@ fi
 
 mkdir -p "$(dirname "${DB_PATH}")"
 mkdir -p "$(dirname "${LOG_PATH}")"
+mkdir -p "${HOME}/.local/bin"
 
 if [[ ! -x "${HERMES_BIN}" ]]; then
   echo "Missing upstream Hermes binary at ${HERMES_BIN}" >&2
@@ -43,6 +44,9 @@ if [[ ! -x "${HERMES_BIN}" ]]; then
 fi
 
 export HERMES_HOME="${UPSTREAM_HOME}"
+
+ln -sf "${REPO_ROOT}/bin/hermes-node" "${HOME}/.local/bin/hermes-node"
+ln -sf "${REPO_ROOT}/bin/hermes-operator" "${HOME}/.local/bin/hermes-operator"
 
 "${HERMES_BIN}" version
 "${REPO_ROOT}/bin/hermes-node" status || true
@@ -60,4 +64,5 @@ echo "  1. Verify upstream:      ${HERMES_BIN} status"
 echo "  2. Submit a task:        ${REPO_ROOT}/bin/hermes-node submit --kind summary --query 'Reply with exactly: ALIVE'"
 echo "  3. Run one task:         ${REPO_ROOT}/bin/hermes-node run"
 echo "  4. Review ledger:        ${REPO_ROOT}/bin/hermes-node status"
-echo "  5. Install service:      sudo install -m 0644 ${SYSTEMD_UNIT_SOURCE} ${SYSTEMD_UNIT_TARGET}"
+echo "  5. Start operator:       ${REPO_ROOT}/bin/hermes-operator chat"
+echo "  6. Install service:      sudo install -m 0644 ${SYSTEMD_UNIT_SOURCE} ${SYSTEMD_UNIT_TARGET}"
