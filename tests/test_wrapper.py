@@ -20,6 +20,7 @@ from hermes_node_ops.models import (
 )
 from hermes_node_ops.wrapper import (
     CommandResult,
+    available_executors,
     build_task_command,
     clean_console_text,
     compute_backoff_seconds,
@@ -28,6 +29,7 @@ from hermes_node_ops.wrapper import (
     is_rate_limit_error,
     summarize_command_result,
 )
+from hermes_node_ops.routing import EXECUTOR_HERMES_CHAT
 
 
 class WrapperCommandTests(unittest.TestCase):

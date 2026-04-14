@@ -48,6 +48,7 @@ class Settings:
     max_attempts: int
     base_backoff_seconds: int
     max_backoff_seconds: int
+    codex_bin: str
 
     @classmethod
     def load(cls, repo_root: Path | None = None) -> "Settings":
@@ -79,6 +80,7 @@ class Settings:
             max_attempts=int(_get(merged, "HERMES_NODE_MAX_ATTEMPTS", "5")),
             base_backoff_seconds=int(_get(merged, "HERMES_NODE_BASE_BACKOFF_SECONDS", "30")),
             max_backoff_seconds=int(_get(merged, "HERMES_NODE_MAX_BACKOFF_SECONDS", "900")),
+            codex_bin=_get(merged, "HERMES_NODE_CODEX_BIN", ""),
         )
 
     @property

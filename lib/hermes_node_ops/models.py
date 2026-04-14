@@ -84,6 +84,19 @@ TASK_PROFILES: dict[str, TaskProfile] = {
         requires_repo_path=True,
         use_worktree=True,
     ),
+    "repo_patch_branch": TaskProfile(
+        kind="repo_patch_branch",
+        toolsets=("file", "patch", "clarify", "memory", "session_search"),
+        default_max_turns=8,
+        prompt_preamble=(
+            "You are operating in hermes-node repo_patch_branch mode. "
+            "You may read, write, and patch files in this repository. "
+            "All changes MUST be on the current feature branch — never commit to main or master. "
+            "Stage and commit your changes with a clear message before finishing."
+        ),
+        requires_repo_path=True,
+        use_worktree=True,
+    ),
 }
 
 SUPPORTED_TASK_KINDS = tuple(sorted(TASK_PROFILES))
@@ -117,5 +130,6 @@ class ExecutionOutcome:
     state: str
     exit_code: int | None
     summary: str
+    executor: str = ""
     stdout: str = ""
     stderr: str = ""

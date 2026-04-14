@@ -25,7 +25,7 @@ from .models import (
     new_id,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _dump_json(payload: Any) -> str:
@@ -106,6 +106,7 @@ class Ledger:
                 started_at TEXT NOT NULL,
                 finished_at TEXT,
                 state TEXT NOT NULL,
+                executor TEXT NOT NULL DEFAULT 'hermes_chat',
                 provider TEXT NOT NULL,
                 model TEXT NOT NULL,
                 max_turns INTEGER NOT NULL,
@@ -194,6 +195,15 @@ class Ledger:
             self._conn.execute(
                 "UPDATE tasks SET approval_state = 'requested' WHERE approval_state = 'requested'"
             )
+
+        if version < 3:
+            # v2 -> v3: add executor column to runs
+            try:
+                self._conn.execute(
+                    "ALTER TABLE runs ADD COLUMN executor TEXT NOT NULL DEFAULT 'hermes_chat'"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
         self._set_schema_version(SCHEMA_VERSION)
         self._conn.commit()
@@ -339,6 +349,7 @@ class Ledger:
         provider: str,
         model: str,
         max_turns: int,
+        executor: str = "hermes_chat",
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         task = self.get_task(task_id)
         if task["approval_state"] not in {APPROVAL_NOT_REQUIRED, APPROVAL_GRANTED}:
@@ -351,10 +362,10 @@ class Ledger:
         self._conn.execute(
             """
             INSERT INTO runs (
-                id, task_id, created_at, started_at, finished_at, state, provider, model,
+                id, task_id, created_at, started_at, finished_at, state, executor, provider, model,
                 max_turns, command_json, working_dir, exit_code, stdout, stderr, duration_ms, hermes_session_id
             )
-            VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, '', '', NULL, '')
+            VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, '', '', NULL, '')
             """,
             (
                 run_id,
@@ -362,6 +373,7 @@ class Ledger:
                 started_at,
                 started_at,
                 TASK_STATE_RUNNING,
+                executor,
                 provider,
                 model,
                 max_turns,

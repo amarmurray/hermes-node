@@ -10,7 +10,15 @@ from pathlib import Path
 from .config import Settings
 from .ledger import Ledger
 from .models import APPROVAL_GRANTED, SUPPORTED_TASK_KINDS, TASK_STATE_DEFERRED_RATE_LIMIT, TaskSubmission
-from .wrapper import ensure_summary, execute_task, format_status_snapshot, log_wrapper_event, run_command
+from .routing import format_route_table, get_route, is_approval_required, is_kind_allowed
+from .wrapper import (
+    available_executors,
+    ensure_summary,
+    execute_task,
+    format_status_snapshot,
+    log_wrapper_event,
+    run_command,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -29,16 +37,23 @@ def main(argv: list[str] | None = None) -> int:
         _emit_result(result.stdout, result.stderr)
         return result.exit_code
 
+    if args.command == "route":
+        return _handle_route(settings, args)
+
     with Ledger(settings.ledger_db) as ledger:
         if args.command == "submit":
+            kind = args.kind
+            # Policy: force approval for kinds that require it
+            require_approval = args.require_approval or is_approval_required(kind)
+
             submission = TaskSubmission(
-                kind=args.kind,
+                kind=kind,
                 title=args.title,
                 prompt=args.query,
                 provider=args.provider or settings.default_provider,
                 model=args.model or settings.default_model,
                 repo_path=args.repo or "",
-                require_approval=args.require_approval,
+                require_approval=require_approval,
                 created_by=args.created_by or os.environ.get("USER", "operator"),
                 max_turns=args.max_turns,
             )
@@ -120,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--title", default="")
     submit.add_argument("--provider")
     submit.add_argument("--model")
-    submit.add_argument("--repo", help="Repository path for repo_read tasks")
+    submit.add_argument("--repo", help="Repository path for repo_read/repo_patch_branch tasks")
     submit.add_argument("--max-turns", type=int)
     submit.add_argument("--max-attempts", type=int, default=0, help="Max retry attempts for rate-limit deferral")
     submit.add_argument("--created-by", default="")
@@ -148,7 +163,56 @@ def build_parser() -> argparse.ArgumentParser:
     summarize_parser.add_argument("--run-id", default="")
     summarize_parser.add_argument("--json", action="store_true")
 
+    route_parser = subparsers.add_parser("route", help="Inspect routing policy and executor availability")
+    route_parser.add_argument("--kind", default="", help="Show route for a specific task kind")
+    route_parser.add_argument("--json", action="store_true")
+
     return parser
+
+
+def _handle_route(settings: Settings, args: argparse.Namespace) -> int:
+    avail = available_executors(settings)
+    if args.kind:
+        if not is_kind_allowed(args.kind):
+            print(f"No route defined for kind: {args.kind}")
+            return 1
+        route = get_route(args.kind)
+        payload = {
+            "kind": route.kind,
+            "risk_class": route.risk_class,
+            "default_executor": route.default_executor,
+            "fallback_executors": list(route.fallback_executors),
+            "approval_required": route.approval_required,
+            "description": route.description,
+            "executor_available": route.default_executor in avail,
+            "available_executors": sorted(avail),
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"{route.kind}:")
+            print(f"  risk:     {route.risk_class}")
+            print(f"  executor: {route.default_executor} ({'available' if route.default_executor in avail else 'NOT available'})")
+            if route.fallback_executors:
+                print(f"  fallback: {', '.join(route.fallback_executors)}")
+            print(f"  approval: {'required' if route.approval_required else 'not required'}")
+            print(f"  {route.description}")
+        return 0
+
+    routes = format_route_table()
+    if args.json:
+        print(json.dumps({"routes": routes, "available_executors": sorted(avail)}, indent=2, sort_keys=True))
+        return 0
+
+    print(f"available executors: {', '.join(sorted(avail))}")
+    print()
+    for r in routes:
+        marker = "+" if r["default_executor"] in avail else "-"
+        approval = " [approval]" if r["approval_required"] else ""
+        print(f"  [{marker}] {r['kind']:22s} {r['risk_class']:14s} -> {r['default_executor']}{approval}")
+        if r["fallback_executors"]:
+            print(f"      fallback: {', '.join(r['fallback_executors'])}")
+    return 0
 
 
 def _run_loop(settings: Settings, ledger: Ledger, args: argparse.Namespace) -> int:
@@ -192,7 +256,6 @@ def _run_loop(settings: Settings, ledger: Ledger, args: argparse.Namespace) -> i
         if outcome.exit_code not in (0, None):
             if not args.watch:
                 return 1
-            # In watch mode, log the failure and keep going
             continue
 
         if args.limit and executed >= args.limit:
@@ -219,6 +282,7 @@ def _print_execution(outcome: object, *, json_mode: bool) -> None:
         "run_id": outcome.run_id,
         "state": outcome.state,
         "exit_code": outcome.exit_code,
+        "executor": outcome.executor,
         "summary": outcome.summary,
     }
     if json_mode:
@@ -227,6 +291,8 @@ def _print_execution(outcome: object, *, json_mode: bool) -> None:
     print(f"{outcome.task_id} -> {outcome.state}")
     if outcome.run_id:
         print(f"run: {outcome.run_id}")
+    if outcome.executor:
+        print(f"executor: {outcome.executor}")
     if outcome.exit_code is not None:
         print(f"exit_code: {outcome.exit_code}")
     print()
@@ -253,7 +319,8 @@ def _print_status(payload: dict[str, object], *, json_mode: bool) -> None:
     print()
     print("recent runs:")
     for run in payload["recent_runs"]:
-        print(f"  {run['id']} [{run['state']}] task={run['task_id']} exit={run['exit_code']}")
+        executor = run.get("executor", "hermes_chat")
+        print(f"  {run['id']} [{run['state']}] task={run['task_id']} executor={executor} exit={run['exit_code']}")
 
     deferred = payload.get("deferred_tasks", [])
     if deferred:

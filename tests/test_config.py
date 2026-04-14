@@ -47,6 +47,7 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(settings.max_attempts, 5)
             self.assertEqual(settings.base_backoff_seconds, 30)
             self.assertEqual(settings.max_backoff_seconds, 900)
+            self.assertEqual(settings.codex_bin, "")
 
 
 if __name__ == "__main__":

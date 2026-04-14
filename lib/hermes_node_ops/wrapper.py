@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import os
 import random
 import re
@@ -11,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .codex import codex_available, make_branch_name, run_codex
 from .config import Settings
 from .jsonl import append_jsonl, utcnow
 from .ledger import Ledger
@@ -24,6 +24,13 @@ from .models import (
     TASK_STATE_PENDING,
     TASK_STATE_PENDING_APPROVAL,
     get_task_profile,
+)
+from .routing import (
+    EXECUTOR_CODEX,
+    EXECUTOR_HERMES_CHAT,
+    RISK_BRANCH_WRITE,
+    get_route,
+    resolve_executor,
 )
 
 
@@ -83,6 +90,16 @@ def log_wrapper_event(settings: Settings, action: str, **payload: Any) -> None:
         },
     )
 
+
+def available_executors(settings: Settings) -> set[str]:
+    """Return the set of executors that are currently available."""
+    avail = {EXECUTOR_HERMES_CHAT}  # always available via upstream hermes
+    if codex_available(settings):
+        avail.add(EXECUTOR_CODEX)
+    return avail
+
+
+# -- Hermes chat executor --
 
 def build_upstream_command(settings: Settings, *args: str) -> list[str]:
     return [str(settings.resolved_hermes_bin), *args]
@@ -179,6 +196,8 @@ def run_command(
     )
 
 
+# -- Executor dispatch --
+
 def execute_task(
     settings: Settings,
     ledger: Ledger,
@@ -192,6 +211,54 @@ def execute_task(
     if task["state"] not in {TASK_STATE_PENDING, TASK_STATE_PENDING_APPROVAL, TASK_STATE_DEFERRED_RATE_LIMIT}:
         raise ValueError(f"Task {task_id} is not runnable from state {task['state']}")
 
+    # Resolve executor via routing policy
+    route = get_route(task["kind"])
+    avail = available_executors(settings)
+    executor = resolve_executor(task["kind"], available_executors=avail)
+
+    if executor is None:
+        # No executor available — fail legibly
+        summary = (
+            f"No executor available for kind={task['kind']}. "
+            f"Route requires {route.default_executor}, "
+            f"fallbacks={list(route.fallback_executors)}, "
+            f"available={sorted(avail)}."
+        )
+        log_wrapper_event(
+            settings, "task_run.no_executor",
+            task_id=task_id, kind=task["kind"],
+            required=route.default_executor, available=sorted(avail),
+        )
+        ledger._conn.execute(
+            "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+            (TASK_STATE_FAILED, utcnow(), task_id),
+        )
+        ledger._conn.commit()
+        ledger.add_event(
+            task_id, event_type="task.no_executor", level="error",
+            message=summary,
+        )
+        return ExecutionOutcome(
+            task_id=task_id, run_id=None, state=TASK_STATE_FAILED,
+            exit_code=None, summary=summary, executor=route.default_executor,
+        )
+
+    if executor == EXECUTOR_CODEX:
+        return _execute_via_codex(settings, ledger, task, route)
+    else:
+        return _execute_via_hermes(settings, ledger, task, executor, command_runner=command_runner)
+
+
+def _execute_via_hermes(
+    settings: Settings,
+    ledger: Ledger,
+    task: dict[str, Any],
+    executor: str,
+    *,
+    command_runner=run_command,
+) -> ExecutionOutcome:
+    """Run a task through the upstream Hermes chat executor."""
+    task_id = task["id"]
     command, provider, model, max_turns, workdir = build_task_command(settings, task=task)
     task, run = ledger.begin_run(
         task_id,
@@ -200,6 +267,7 @@ def execute_task(
         provider=provider,
         model=model,
         max_turns=max_turns,
+        executor=executor,
     )
     log_wrapper_event(
         settings,
@@ -207,6 +275,7 @@ def execute_task(
         task_id=task_id,
         run_id=run["id"],
         kind=task["kind"],
+        executor=executor,
         provider=provider,
         model=model,
         working_dir=workdir,
@@ -224,92 +293,9 @@ def execute_task(
 
     # Detect rate-limit and defer instead of hard-failing
     if result.exit_code != 0 and is_rate_limit_error(result.stdout, result.stderr):
-        attempt_count = task.get("attempt_count", 0)
-        max_attempts = task.get("max_attempts", settings.max_attempts)
-
-        # Record the run as failed (the individual run did fail)
-        ledger.finish_run(
-            run["id"],
-            exit_code=result.exit_code,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            duration_ms=result.duration_ms,
-            hermes_session_id=session_id,
-        )
-
-        if attempt_count + 1 >= max_attempts:
-            # Exhausted retries — mark task permanently failed
-            ledger._conn.execute(
-                "UPDATE tasks SET state = ?, updated_at = ?, attempt_count = attempt_count + 1 WHERE id = ?",
-                (TASK_STATE_FAILED, utcnow(), task_id),
-            )
-            ledger._conn.commit()
-            ledger.add_event(
-                task_id,
-                run_id=run["id"],
-                event_type="task.max_attempts_exceeded",
-                level="error",
-                message=f"Task exhausted {max_attempts} attempts due to rate limiting",
-            )
-            log_wrapper_event(
-                settings,
-                "task_run.max_attempts_exceeded",
-                task_id=task_id,
-                run_id=run["id"],
-                attempt_count=attempt_count + 1,
-                max_attempts=max_attempts,
-            )
-            summary = f"Task {task_id} permanently failed after {max_attempts} rate-limit retries."
-            ledger.add_summary(task_id, run_id=run["id"], content=summary, metadata={"rate_limited": True})
-            return ExecutionOutcome(
-                task_id=task_id,
-                run_id=run["id"],
-                state=TASK_STATE_FAILED,
-                exit_code=result.exit_code,
-                summary=summary,
-                stdout=result.stdout,
-                stderr=result.stderr,
-            )
-
-        # Defer for retry
-        next_at = compute_next_attempt_at(
-            attempt_count,
-            settings.base_backoff_seconds,
-            settings.max_backoff_seconds,
-        )
-        cooldown_at = next_at  # provider cooldown matches task backoff
-        reason = f"Rate limited (attempt {attempt_count + 1}/{max_attempts}). Next retry after {next_at}."
-
-        ledger.defer_task_rate_limit(
-            task_id,
-            run_id=run["id"],
-            next_attempt_at=next_at,
-            reason=reason,
-        )
-        ledger.set_provider_cooldown(
-            provider,
-            model,
-            cooldown_until=cooldown_at,
-            last_error=result.stderr[:500],
-        )
-        log_wrapper_event(
-            settings,
-            "task_run.deferred_rate_limit",
-            task_id=task_id,
-            run_id=run["id"],
-            attempt_count=attempt_count + 1,
-            next_attempt_at=next_at,
-            provider=provider,
-            model=model,
-        )
-        return ExecutionOutcome(
-            task_id=task_id,
-            run_id=run["id"],
-            state=TASK_STATE_DEFERRED_RATE_LIMIT,
-            exit_code=result.exit_code,
-            summary=reason,
-            stdout=result.stdout,
-            stderr=result.stderr,
+        return _handle_rate_limit(
+            settings, ledger, task, run, result, session_id,
+            executor=executor, provider=provider, model=model,
         )
 
     # Normal completion or non-rate-limit failure
@@ -326,7 +312,7 @@ def execute_task(
         task_id,
         run_id=run["id"],
         content=summary,
-        metadata={"exit_code": result.exit_code, "hermes_session_id": session_id},
+        metadata={"exit_code": result.exit_code, "hermes_session_id": session_id, "executor": executor},
     )
     log_wrapper_event(
         settings,
@@ -334,6 +320,7 @@ def execute_task(
         task_id=task_id,
         run_id=run["id"],
         state=task["state"],
+        executor=executor,
         exit_code=result.exit_code,
         hermes_session_id=session_id,
     )
@@ -343,10 +330,206 @@ def execute_task(
         state=task["state"],
         exit_code=result.exit_code,
         summary=summary,
+        executor=executor,
         stdout=result.stdout,
         stderr=result.stderr,
     )
 
+
+def _execute_via_codex(
+    settings: Settings,
+    ledger: Ledger,
+    task: dict[str, Any],
+    route,
+) -> ExecutionOutcome:
+    """Run a task through the Codex executor."""
+    task_id = task["id"]
+    repo_path = task["repo_path"]
+    if not repo_path:
+        raise ValueError(f"Task {task_id} requires a repo_path for Codex execution")
+
+    writable = route.risk_class == RISK_BRANCH_WRITE
+    branch = make_branch_name(task_id) if writable else ""
+    provider = task["provider"] or "codex"
+    model = task["model"] or "codex"
+
+    # Build a command representation for the ledger
+    cmd_repr = ["codex", "--approval-mode", "auto-edit" if writable else "suggest", task["prompt"]]
+
+    task_obj, run = ledger.begin_run(
+        task_id,
+        command=cmd_repr,
+        working_dir=repo_path,
+        provider=provider,
+        model=model,
+        max_turns=0,
+        executor=EXECUTOR_CODEX,
+    )
+    log_wrapper_event(
+        settings,
+        "task_run.started",
+        task_id=task_id,
+        run_id=run["id"],
+        kind=task["kind"],
+        executor=EXECUTOR_CODEX,
+        writable=writable,
+        branch=branch,
+        repo_path=repo_path,
+    )
+
+    try:
+        codex_result = run_codex(
+            settings,
+            prompt=task["prompt"],
+            repo_path=repo_path,
+            task_id=task_id,
+            run_id=run["id"],
+            writable=writable,
+            branch=branch,
+        )
+    except Exception as exc:
+        # Codex call itself failed (e.g. missing API key, binary crash)
+        error_msg = f"Codex executor error: {exc}"
+        ledger.finish_run(
+            run["id"],
+            exit_code=127,
+            stdout="",
+            stderr=error_msg,
+            duration_ms=0,
+        )
+        ledger.add_event(
+            task_id, run_id=run["id"],
+            event_type="run.codex_error", level="error",
+            message=error_msg,
+        )
+        log_wrapper_event(settings, "task_run.codex_error", task_id=task_id, run_id=run["id"], error=str(exc))
+        return ExecutionOutcome(
+            task_id=task_id, run_id=run["id"], state=TASK_STATE_FAILED,
+            exit_code=127, summary=error_msg, executor=EXECUTOR_CODEX,
+        )
+
+    # Rate-limit check for Codex too
+    if codex_result.exit_code != 0 and is_rate_limit_error(codex_result.stdout, codex_result.stderr):
+        cr = CommandResult(
+            command=codex_result.command,
+            exit_code=codex_result.exit_code,
+            stdout=codex_result.stdout,
+            stderr=codex_result.stderr,
+            duration_ms=codex_result.duration_ms,
+        )
+        return _handle_rate_limit(
+            settings, ledger, task_obj, run, cr, "",
+            executor=EXECUTOR_CODEX, provider=provider, model=model,
+        )
+
+    task_obj, run = ledger.finish_run(
+        run["id"],
+        exit_code=codex_result.exit_code,
+        stdout=codex_result.stdout,
+        stderr=codex_result.stderr,
+        duration_ms=codex_result.duration_ms,
+    )
+    summary = summarize_command_result(task_obj, run)
+    metadata: dict[str, Any] = {
+        "exit_code": codex_result.exit_code,
+        "executor": EXECUTOR_CODEX,
+    }
+    if branch:
+        metadata["branch"] = branch
+    ledger.add_summary(task_id, run_id=run["id"], content=summary, metadata=metadata)
+    log_wrapper_event(
+        settings,
+        "task_run.finished",
+        task_id=task_id,
+        run_id=run["id"],
+        state=task_obj["state"],
+        executor=EXECUTOR_CODEX,
+        exit_code=codex_result.exit_code,
+        branch=branch,
+    )
+    return ExecutionOutcome(
+        task_id=task_id,
+        run_id=run["id"],
+        state=task_obj["state"],
+        exit_code=codex_result.exit_code,
+        summary=summary,
+        executor=EXECUTOR_CODEX,
+        stdout=codex_result.stdout,
+        stderr=codex_result.stderr,
+    )
+
+
+# -- Rate-limit handling (shared) --
+
+def _handle_rate_limit(
+    settings: Settings,
+    ledger: Ledger,
+    task: dict[str, Any],
+    run: dict[str, Any],
+    result: CommandResult,
+    session_id: str,
+    *,
+    executor: str,
+    provider: str,
+    model: str,
+) -> ExecutionOutcome:
+    task_id = task["id"]
+    attempt_count = task.get("attempt_count", 0)
+    max_attempts = task.get("max_attempts", settings.max_attempts)
+
+    ledger.finish_run(
+        run["id"],
+        exit_code=result.exit_code,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        duration_ms=result.duration_ms,
+        hermes_session_id=session_id,
+    )
+
+    if attempt_count + 1 >= max_attempts:
+        ledger._conn.execute(
+            "UPDATE tasks SET state = ?, updated_at = ?, attempt_count = attempt_count + 1 WHERE id = ?",
+            (TASK_STATE_FAILED, utcnow(), task_id),
+        )
+        ledger._conn.commit()
+        ledger.add_event(
+            task_id, run_id=run["id"],
+            event_type="task.max_attempts_exceeded", level="error",
+            message=f"Task exhausted {max_attempts} attempts due to rate limiting",
+        )
+        log_wrapper_event(
+            settings, "task_run.max_attempts_exceeded",
+            task_id=task_id, run_id=run["id"], executor=executor,
+            attempt_count=attempt_count + 1, max_attempts=max_attempts,
+        )
+        summary = f"Task {task_id} permanently failed after {max_attempts} rate-limit retries."
+        ledger.add_summary(task_id, run_id=run["id"], content=summary, metadata={"rate_limited": True})
+        return ExecutionOutcome(
+            task_id=task_id, run_id=run["id"], state=TASK_STATE_FAILED,
+            exit_code=result.exit_code, summary=summary, executor=executor,
+            stdout=result.stdout, stderr=result.stderr,
+        )
+
+    next_at = compute_next_attempt_at(
+        attempt_count, settings.base_backoff_seconds, settings.max_backoff_seconds,
+    )
+    reason = f"Rate limited (attempt {attempt_count + 1}/{max_attempts}). Next retry after {next_at}."
+    ledger.defer_task_rate_limit(task_id, run_id=run["id"], next_attempt_at=next_at, reason=reason)
+    ledger.set_provider_cooldown(provider, model, cooldown_until=next_at, last_error=result.stderr[:500])
+    log_wrapper_event(
+        settings, "task_run.deferred_rate_limit",
+        task_id=task_id, run_id=run["id"], executor=executor,
+        attempt_count=attempt_count + 1, next_attempt_at=next_at,
+        provider=provider, model=model,
+    )
+    return ExecutionOutcome(
+        task_id=task_id, run_id=run["id"], state=TASK_STATE_DEFERRED_RATE_LIMIT,
+        exit_code=result.exit_code, summary=reason, executor=executor,
+        stdout=result.stdout, stderr=result.stderr,
+    )
+
+
+# -- Summary helpers --
 
 def summarize_command_result(task: dict[str, Any], run: dict[str, Any]) -> str:
     response = extract_response_text(run["stdout"])
