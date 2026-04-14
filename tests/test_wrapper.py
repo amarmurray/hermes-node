@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
 from hermes_node_ops.config import Settings
+from hermes_node_ops.codex import CodexResult
 from hermes_node_ops.ledger import Ledger
 from hermes_node_ops.jsonl import append_jsonl
 from hermes_node_ops.models import (
@@ -104,6 +105,61 @@ class WrapperCommandTests(unittest.TestCase):
         self.assertEqual(receipt["executor"], EXECUTOR_HERMES_CHAT)
         self.assertEqual(receipt["task_state"], TASK_STATE_DONE)
         self.assertEqual(receipt["run_state"], TASK_STATE_DONE)
+
+    def test_execute_repo_read_via_codex_records_command_and_receipt(self) -> None:
+        settings = self.make_settings()
+        fake_codex = CodexResult(
+            command=[
+                "/usr/local/bin/codex",
+                "-a",
+                "never",
+                "-s",
+                "read-only",
+                "exec",
+                "-m",
+                "openai/gpt-oss-20b:free",
+                "--color",
+                "never",
+                "-C",
+                "/tmp/repo",
+                "Confirm README.md exists, then reply with exactly: CODEX_WRAPPER_OK",
+            ],
+            exit_code=0,
+            stdout="codex\nCODEX_WRAPPER_OK\n",
+            stderr="",
+            duration_ms=42,
+            branch="",
+            auth_mode="openrouter_env",
+            provider_id="openrouter_custom",
+        )
+
+        with tempfile.TemporaryDirectory() as repo_tmp:
+            repo_path = Path(repo_tmp)
+            (repo_path / ".git").mkdir()
+            with Ledger(settings.ledger_db) as ledger:
+                task = ledger.create_task(
+                    TaskSubmission(
+                        kind="repo_read",
+                        prompt="Confirm README.md exists, then reply with exactly: CODEX_WRAPPER_OK",
+                        repo_path=str(repo_path),
+                    )
+                )
+                with patch("hermes_node_ops.wrapper.codex_available", return_value=True):
+                    with patch("hermes_node_ops.wrapper.run_codex", return_value=fake_codex):
+                        outcome = execute_task(settings, ledger, task["id"])
+                run = ledger.latest_run_for_task(task["id"])
+                summary = ledger.latest_summary(task_id=task["id"])
+
+        self.assertEqual(outcome.state, TASK_STATE_DONE)
+        self.assertEqual(outcome.executor, "codex")
+        self.assertEqual(outcome.summary, "CODEX_WRAPPER_OK")
+        self.assertEqual(summary["content"], "CODEX_WRAPPER_OK")
+        self.assertEqual(run["command"], fake_codex.command)
+        workspace = Path(task["workspace_dir"])
+        receipt = json.loads((workspace / "runs" / run["id"] / "receipt.json").read_text(encoding="utf-8"))
+        self.assertEqual(receipt["executor"], "codex")
+        self.assertEqual(receipt["auth_mode"], "openrouter_env")
+        self.assertEqual(receipt["provider_id"], "openrouter_custom")
 
     def test_summary_helpers_strip_banner_lines(self) -> None:
         raw = "\n╭─ ⚕ Hermes ──────────────────╮\nALIVE\nsession_id: abc123\n"

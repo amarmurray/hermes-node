@@ -545,7 +545,7 @@ def _execute_via_codex(
             branch=branch,
         )
         ledger._conn.execute(
-            "UPDATE runs SET command = ? WHERE id = ?",
+            "UPDATE runs SET command_json = ? WHERE id = ?",
             (json.dumps(codex_result.command), run["id"]),
         )
         ledger._conn.commit()
