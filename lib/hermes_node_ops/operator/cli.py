@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 from ..config import Settings
-from .backend import create_backend
+from .backend_policy import OperatorIntent, resolve_backend
 from .repl import run_repl
 from .session import list_sessions, read_context, read_notes, read_thread
 
@@ -84,36 +83,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _handle_chat(settings: Settings, args: argparse.Namespace) -> int:
-    import os
-    base_url = (
-        args.base_url
-        or os.environ.get("HERMES_OPERATOR_BASE_URL", "")
-        or "http://localhost:11434"
-    )
-    api_key = (
-        args.api_key
-        or os.environ.get("HERMES_OPERATOR_API_KEY", "")
-    )
-    model = (
-        args.model
-        or os.environ.get("HERMES_OPERATOR_MODEL", "")
-        or "qwen3:1.7b"
-    )
-
-    backend = create_backend(
-        base_url=base_url,
-        api_key=api_key,
-        model=model,
+    backend, selection = resolve_backend(
+        settings,
+        intent=OperatorIntent.CHAT,
+        model_override=args.model,
+        base_url_override=args.base_url,
+        api_key_override=args.api_key,
         timeout_seconds=args.timeout,
     )
 
     # Check backend availability
     if not backend.available():
-        print(f"Backend not reachable at {base_url}")
+        print(f"Backend not reachable at {selection.descriptor.base_url}")
         print(f"Make sure your inference server is running.")
-        print(f"  Ollama:    ollama serve && ollama pull {model}")
+        print(f"  Ollama:    ollama serve && ollama pull {selection.descriptor.model}")
         print(f"  llama.cpp: ./server -m model.gguf --port 8080")
-        print(f"  vLLM:      vllm serve {model}")
+        print(f"  vLLM:      vllm serve {selection.descriptor.model}")
         return 1
 
     run_repl(settings, backend, session_id=args.resume)

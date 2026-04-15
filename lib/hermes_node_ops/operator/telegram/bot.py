@@ -12,21 +12,16 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from pathlib import Path
 from typing import Any
 
 from ...config import Settings
 from ...jsonl import append_jsonl, utcnow
 from ...ledger import Ledger
-from ..backend import ChatBackend, ToolCall, create_backend
-from ..constitution import build_system_prompt
+from ..backend import ChatBackend
+from ..backend_policy import OperatorIntent, resolve_backend
 from ..harness import list_subagents, read_plan, read_todo_markdown
-from ..session import (
-    append_message,
-    build_messages_for_backend,
-    create_session,
-    read_notes,
-)
+from ..runtime import run_operator_turn
+from ..session import create_session
 from ..tools import ToolExecutor, get_tool_definitions
 from .client import TelegramClient, TelegramUpdate
 from .formatter import (
@@ -295,91 +290,22 @@ class TelegramBot:
         sid = self._session_id_for_chat(update.chat_id)
         executor = self._make_executor(update.chat_id)
 
-        # Record user message
-        append_message(self.repo_root, sid, role="user", content=text)
-
-        notes = read_notes(self.repo_root, sid)
-        system_prompt = build_system_prompt(session_notes=notes)
-        messages = build_messages_for_backend(
-            self.repo_root, sid, system_prompt=system_prompt,
-        )
-
         # Typing indicator
         self.client.send_chat_action(update.chat_id, "typing")
-
-        rounds = 0
-        tool_trace: list[str] = []
-        while rounds < MAX_TOOL_ROUNDS:
-            rounds += 1
-            try:
-                response = self.backend.chat(
-                    messages, tools=self.tool_defs, temperature=0.3,
-                )
-            except Exception as exc:  # noqa: BLE001
-                err = f"[backend error] {exc}"
-                append_message(self.repo_root, sid, role="assistant", content=err)
-                self.client.send_message(update.chat_id, err[:1500])
-                return
-
-            if response.tool_calls:
-                tc_serialized = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments),
-                        },
-                    }
-                    for tc in response.tool_calls
-                ]
-                append_message(
-                    self.repo_root, sid,
-                    role="assistant",
-                    content=response.content or "",
-                    tool_calls=tc_serialized,
-                )
-                messages.append({
-                    "role": "assistant",
-                    "content": response.content or "",
-                    "tool_calls": tc_serialized,
-                })
-
-                for tc in response.tool_calls:
-                    tool_trace.append(f"-> {tc.name}")
-                    result = executor.dispatch(tc.name, tc.arguments)
-                    append_message(
-                        self.repo_root, sid,
-                        role="tool",
-                        content=result,
-                        tool_call_id=tc.id,
-                        name=tc.name,
-                    )
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "name": tc.name,
-                        "content": result,
-                    })
-
-                # Keep typing during tool rounds
-                self.client.send_chat_action(update.chat_id, "typing")
-                continue
-
-            # No more tool calls — final assistant response
-            content = format_assistant_response(response.content or "")
-            append_message(self.repo_root, sid, role="assistant", content=content)
-
-            reply = content if content else "(empty response)"
-            if tool_trace:
-                reply = reply + "\n\n" + " ".join(tool_trace[:10])
-            self.client.send_message(update.chat_id, reply)
-            return
-
-        self.client.send_message(
-            update.chat_id,
-            "[tool call limit reached]",
+        result = run_operator_turn(
+            settings=self.settings,
+            backend=self.backend,
+            executor=executor,
+            repo_root=self.repo_root,
+            session_id=sid,
+            user_input=text,
+            tool_defs=self.tool_defs,
+            max_tool_rounds=MAX_TOOL_ROUNDS,
+            temperature=0.3,
+            on_tool_result=lambda _name, _result: self.client.send_chat_action(update.chat_id, "typing"),
         )
+        reply = format_assistant_response(result.text or "(empty response)")
+        self.client.send_message(update.chat_id, reply)
 
     def _handle_callback(self, update: TelegramUpdate) -> None:
         """Handle inline keyboard button presses."""
@@ -539,11 +465,9 @@ def build_bot(settings: Settings) -> TelegramBot:
             "Create a bot via @BotFather and put the token in .env."
         )
 
-    import os
-    backend = create_backend(
-        base_url=os.environ.get("HERMES_OPERATOR_BASE_URL", "") or "http://localhost:11434",
-        api_key=os.environ.get("HERMES_OPERATOR_API_KEY", ""),
-        model=os.environ.get("HERMES_OPERATOR_MODEL", "") or "qwen3:1.7b",
+    backend, _selection = resolve_backend(
+        settings,
+        intent=OperatorIntent.CHAT,
         timeout_seconds=180,
     )
     client = TelegramClient(

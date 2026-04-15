@@ -180,7 +180,7 @@ def test_format_assistant_response_strips_thinking() -> None:
 def test_format_assistant_response_caps_length() -> None:
     out = format_assistant_response("x" * 5000)
     assert len(out) <= 3504
-    assert out.endswith("...")
+    assert "trimmed" in out or out.endswith("...")
 
 
 def test_format_alert_shapes() -> None:

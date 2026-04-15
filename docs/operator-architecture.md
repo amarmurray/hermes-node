@@ -5,6 +5,8 @@ It talks to the human, reads hermes-node state, decides what kind of task
 something is, invokes hermes-node tools to act, and reports back.
 
 Canonical stack map: [stack-evolution.md](stack-evolution.md)
+Runtime and future scheduler seam: [phase3-runtime-and-temporal-seam.md](phase3-runtime-and-temporal-seam.md)
+Upstream membrane inventory: [hermes-capability-registry.md](hermes-capability-registry.md)
 
 ## Topology
 
@@ -148,7 +150,13 @@ Configuration via environment or `.env`:
 HERMES_OPERATOR_BASE_URL=http://localhost:11434
 HERMES_OPERATOR_MODEL=qwen3:1.7b
 HERMES_OPERATOR_API_KEY=
+HERMES_OPERATOR_REMOTE_BASE_URL=
+HERMES_OPERATOR_REMOTE_MODEL=
+HERMES_OPERATOR_REMOTE_API_KEY=
 ```
+
+The backend policy keeps the local resident path primary and lets heavier
+intents escalate later without changing the ingress surface.
 
 ## Running
 

@@ -42,6 +42,9 @@ The intended next step is wrapper CLI ingress first, then a local-only API ingre
 Canonical topology and phase map:
 
 - [docs/stack-evolution.md](docs/stack-evolution.md)
+- [docs/operator-architecture.md](docs/operator-architecture.md)
+- [docs/phase3-runtime-and-temporal-seam.md](docs/phase3-runtime-and-temporal-seam.md)
+- [docs/hermes-capability-registry.md](docs/hermes-capability-registry.md)
 
 Stack evolution:
 
@@ -71,6 +74,17 @@ Design rules:
 - durable state lives in workspaces, receipts, and session artifacts, not process memory
 - no direct bypass of ledger, approvals, or routing
 - suboperators become bounded organs, not rogue daemons
+
+## Operator Runtime
+
+Phase 3 adds three operator-facing layers without changing the membrane:
+
+- shared terminal/Telegram operator turn runtime
+- natural-language response synthesis over grounded tool results
+- a future Temporal invoke seam returning structured operator outcomes
+
+This improves operator cognition and answer quality without turning the
+operator into a second orchestrator.
 
 ## Supported task kinds
 

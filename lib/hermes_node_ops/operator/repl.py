@@ -11,24 +11,17 @@ from __future__ import annotations
 
 import json
 import readline
-import sys
 from pathlib import Path
-from typing import Any
 
 from ..config import Settings
-from .backend import AssistantMessage, ChatBackend, ToolCall
-from .constitution import build_system_prompt
+from .backend import ChatBackend, ToolCall
 from .harness import (
     list_subagents,
     read_plan,
     read_todo_markdown,
 )
-from .session import (
-    append_message,
-    build_messages_for_backend,
-    create_session,
-    read_notes,
-)
+from .runtime import run_operator_turn
+from .session import create_session
 from .tools import ToolExecutor, get_tool_definitions
 
 
@@ -80,23 +73,25 @@ def run_repl(
                 continue
 
             # Record user message
-            append_message(repo_root, sid, role="user", content=user_input)
-
-            # Build messages and call backend
-            notes = read_notes(repo_root, sid)
-            system_prompt = build_system_prompt(session_notes=notes)
-            messages = build_messages_for_backend(
-                repo_root, sid, system_prompt=system_prompt,
-            )
-
-            _conversation_turn(
+            result = run_operator_turn(
+                settings=settings,
                 backend=backend,
                 executor=executor,
-                messages=messages,
-                tool_defs=tool_defs,
                 repo_root=repo_root,
                 session_id=sid,
+                user_input=user_input,
+                tool_defs=tool_defs,
+                max_tool_rounds=MAX_TOOL_ROUNDS,
+                on_intermediate_assistant=_print_intermediate_assistant,
+                on_tool_call=_print_tool_call,
+                on_tool_result=_print_tool_result,
             )
+            if result.error:
+                print(f"\x1b[31m{result.text}\x1b[0m")
+                continue
+            print(f"\n\x1b[1;37m{result.text}\x1b[0m\n")
+            if result.tool_limit_reached:
+                print("\x1b[33m[tool call limit reached]\x1b[0m")
 
     except KeyboardInterrupt:
         print("\n\nInterrupted.")
@@ -108,88 +103,9 @@ def run_repl(
         print(f"\nsession saved: {sid}")
 
 
-def _conversation_turn(
-    *,
-    backend: ChatBackend,
-    executor: ToolExecutor,
-    messages: list[dict[str, Any]],
-    tool_defs: list[dict[str, Any]],
-    repo_root: Path,
-    session_id: str,
-) -> None:
-    """Execute one conversation turn, handling tool call loops."""
-    rounds = 0
-    while rounds < MAX_TOOL_ROUNDS:
-        rounds += 1
-
-        try:
-            response = backend.chat(messages, tools=tool_defs)
-        except Exception as exc:
-            error_msg = f"[backend error: {exc}]"
-            print(f"\x1b[31m{error_msg}\x1b[0m")
-            append_message(repo_root, session_id, role="assistant", content=error_msg)
-            return
-
-        # If there are tool calls, execute them
-        if response.tool_calls:
-            # Record assistant message with tool calls
-            tc_serialized = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.name,
-                        "arguments": json.dumps(tc.arguments),
-                    },
-                }
-                for tc in response.tool_calls
-            ]
-            append_message(
-                repo_root, session_id,
-                role="assistant",
-                content=response.content or "",
-                tool_calls=tc_serialized,
-            )
-            messages.append({
-                "role": "assistant",
-                "content": response.content or "",
-                "tool_calls": tc_serialized,
-            })
-
-            if response.content:
-                print(f"\x1b[2m{response.content}\x1b[0m")
-
-            # Execute each tool call
-            for tc in response.tool_calls:
-                _print_tool_call(tc)
-                result = executor.dispatch(tc.name, tc.arguments)
-                _print_tool_result(tc.name, result)
-
-                # Record tool result
-                append_message(
-                    repo_root, session_id,
-                    role="tool",
-                    content=result,
-                    tool_call_id=tc.id,
-                    name=tc.name,
-                )
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "name": tc.name,
-                    "content": result,
-                })
-
-            # Continue the loop so the model can process tool results
-            continue
-
-        # No tool calls — just text response
-        if response.content:
-            print(f"\n\x1b[1;37m{response.content}\x1b[0m\n")
-            append_message(repo_root, session_id, role="assistant", content=response.content)
-        return
-
-    print("\x1b[33m[tool call limit reached]\x1b[0m")
+def _print_intermediate_assistant(content: str) -> None:
+    if content.strip():
+        print(f"\x1b[2m{content}\x1b[0m")
 
 
 def _print_tool_call(tc: ToolCall) -> None:

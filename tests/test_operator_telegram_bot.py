@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from hermes_node_ops.config import Settings
 from hermes_node_ops.ledger import Ledger
-from hermes_node_ops.operator.backend import AssistantMessage
+from hermes_node_ops.operator.backend import AssistantMessage, ToolCall
 from hermes_node_ops.operator.telegram.bot import TelegramBot
 from hermes_node_ops.operator.telegram.client import TelegramUpdate
 
@@ -266,6 +266,44 @@ class CallbackTests(unittest.TestCase):
         self.assertEqual(client.callbacks, ["cb-1"])
         # approve should fail on a missing task but still respond
         self.assertTrue(any("not approved" in t or "error" in t for _, t in client.sent))
+
+
+class ChatResponseTests(unittest.TestCase):
+    def test_chat_reply_is_naturalized(self) -> None:
+        settings = _make_settings(allowed=(1001,))
+        client = FakeClient()
+        backend = FakeBackend(
+            canned=[
+                AssistantMessage(
+                    content="<think>hidden</think>Sure, let me check.\n\nThe queue is empty."
+                )
+            ]
+        )
+        bot = TelegramBot(settings, backend, client)  # type: ignore[arg-type]
+
+        bot._handle_update(_message_update(1001, "What is happening?"))
+
+        self.assertEqual(client.sent[-1][1], "The queue is empty.")
+
+    def test_chat_does_not_append_raw_tool_trace(self) -> None:
+        settings = _make_settings(allowed=(1001,))
+        client = FakeClient()
+        backend = FakeBackend(
+            canned=[
+                AssistantMessage(
+                    content="",
+                    tool_calls=[ToolCall(id="tc1", name="get_queue_status", arguments={})],
+                ),
+                AssistantMessage(content=""),
+            ]
+        )
+        bot = TelegramBot(settings, backend, client)  # type: ignore[arg-type]
+
+        bot._handle_update(_message_update(1001, "Check the queue."))
+
+        reply = client.sent[-1][1]
+        self.assertIn("get_queue_status", reply)
+        self.assertNotIn("-> get_queue_status", reply)
 
 
 if __name__ == "__main__":

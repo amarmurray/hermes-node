@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..response_synth import humanize_for_telegram
+
 
 def format_queue_status(payload: dict[str, Any]) -> str:
     """Format a get_queue_status payload compactly."""
@@ -208,11 +210,7 @@ def format_tool_result_compact(name: str, result: str) -> str:
 
 def format_assistant_response(content: str) -> str:
     """Sanitize and cap an assistant response for Telegram."""
-    content = content.strip()
-    # Strip common thinking tags some small models emit
-    for tag in ("<think>", "</think>", "<thinking>", "</thinking>"):
-        content = content.replace(tag, "")
-    content = content.strip()
+    content = humanize_for_telegram(content).strip()
     if len(content) > 3500:
         content = content[:3500] + "..."
     return content
