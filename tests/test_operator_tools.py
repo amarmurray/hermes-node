@@ -27,6 +27,41 @@ def _make_settings() -> Settings:
     return Settings.load(root)
 
 
+def _init_git_repo(path: Path) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True)
+    (path / "README").write_text("hi\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=path, check=True)
+
+
+def _register_temp_repo(repo_root: Path, name: str, path: Path) -> None:
+    """Write a minimal config/repos.json pointing at a real temp git repo."""
+    cfg = repo_root / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "repos.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "repos": [
+                    {
+                        "name": name,
+                        "path": str(path),
+                        "allowed_kinds": ["repo_patch_branch", "summary"],
+                        "branch_policy": {
+                            "default_branch": "main",
+                            "branch_prefix": f"{name}/auto/",
+                            "require_clean_worktree": True,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class ToolDefinitionsTests(unittest.TestCase):
     def test_all_tools_have_names(self) -> None:
         defs = get_tool_definitions()
@@ -154,7 +189,9 @@ class ToolDispatchTests(unittest.TestCase):
         settings = _make_settings()
         executor = ToolExecutor(settings, settings.repo_root)
         with tempfile.TemporaryDirectory() as repo_tmp:
-            (Path(repo_tmp) / ".git").mkdir()
+            repo_path = Path(repo_tmp)
+            _init_git_repo(repo_path)
+            _register_temp_repo(settings.repo_root, "fixture", repo_path)
             result = executor.dispatch("submit_task", {
                 "kind": "repo_patch_branch",
                 "prompt": "Fix the bug",
@@ -169,7 +206,9 @@ class ToolDispatchTests(unittest.TestCase):
         settings = _make_settings()
         executor = ToolExecutor(settings, settings.repo_root)
         with tempfile.TemporaryDirectory() as repo_tmp:
-            (Path(repo_tmp) / ".git").mkdir()
+            repo_path = Path(repo_tmp)
+            _init_git_repo(repo_path)
+            _register_temp_repo(settings.repo_root, "fixture", repo_path)
             result = executor.dispatch("submit_task", {
                 "kind": "repo_patch_branch",
                 "prompt": "Fix the bug",
@@ -185,6 +224,99 @@ class ToolDispatchTests(unittest.TestCase):
             data = json.loads(result)
             self.assertTrue(data["approved"])
             self.assertEqual(data["new_state"], "pending")
+
+    def test_registry_and_patch_proposal_tools(self) -> None:
+        settings = _make_settings()
+        sid = create_session(settings.repo_root, model="test-model")
+        executor = ToolExecutor(settings, settings.repo_root, session_id=sid)
+        with tempfile.TemporaryDirectory() as repo_tmp:
+            repo_path = Path(repo_tmp)
+            _init_git_repo(repo_path)
+            _register_temp_repo(settings.repo_root, "fixture", repo_path)
+
+            # list_registered_repos
+            data = json.loads(executor.dispatch("list_registered_repos", {}))
+            self.assertEqual(data["counts"]["total"], 1)
+            self.assertEqual(data["counts"]["present"], 1)
+
+            # get_repo_registry_entry
+            data = json.loads(
+                executor.dispatch(
+                    "get_repo_registry_entry", {"name_or_alias": "fixture"}
+                )
+            )
+            self.assertEqual(data["name"], "fixture")
+            self.assertTrue(data["presence"]["ready_for_mutation"])
+
+            # grounded_repo_summary
+            data = json.loads(
+                executor.dispatch(
+                    "grounded_repo_summary", {"name_or_alias": "fixture"}
+                )
+            )
+            self.assertTrue(data["grounded"])
+            self.assertIn("state", data)
+
+            # list_active_worktrees
+            data = json.loads(
+                executor.dispatch(
+                    "list_active_worktrees", {"name_or_alias": "fixture"}
+                )
+            )
+            self.assertGreaterEqual(data["count"], 1)
+
+            # write_patch_proposal
+            data = json.loads(
+                executor.dispatch(
+                    "write_patch_proposal",
+                    {
+                        "repo_name": "fixture",
+                        "goal": "Add a thing",
+                        "files_in_scope": ["README"],
+                        "risk_notes": ["low risk"],
+                    },
+                )
+            )
+            self.assertTrue(data["written"])
+            patch_id = data["proposal"]["patch_id"]
+            self.assertTrue(data["proposal"]["branch"].startswith("fixture/auto/"))
+
+            # list_patch_proposals
+            props = json.loads(executor.dispatch("list_patch_proposals", {}))
+            self.assertEqual(len(props), 1)
+
+            # submit_patch_from_proposal
+            data = json.loads(
+                executor.dispatch(
+                    "submit_patch_from_proposal", {"patch_id": patch_id}
+                )
+            )
+            self.assertTrue(data["submitted"])
+            self.assertEqual(data["proposal"]["state"], "submitted")
+            self.assertTrue(data["approval_required"])
+            task_id = data["task_id"]
+
+            # synthesize_patch_result — no run yet, should return grounded=False
+            data = json.loads(
+                executor.dispatch(
+                    "synthesize_patch_result", {"task_id": task_id}
+                )
+            )
+            self.assertFalse(data["grounded"])
+            self.assertIn("no runs", data["error"])
+
+    def test_patch_proposal_refuses_unregistered_repo(self) -> None:
+        settings = _make_settings()
+        sid = create_session(settings.repo_root, model="test-model")
+        executor = ToolExecutor(settings, settings.repo_root, session_id=sid)
+        data = json.loads(
+            executor.dispatch(
+                "write_patch_proposal",
+                {"repo_name": "nope", "goal": "x"},
+            )
+        )
+        self.assertFalse(data["written"])
+        self.assertIn("not in the repo registry", data["error"])
 
     def test_approve_non_pending_task_returns_error(self) -> None:
         settings = _make_settings()

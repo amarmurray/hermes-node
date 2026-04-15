@@ -20,6 +20,7 @@ from ..repo_awareness import (
     summarize_repo_map,
     summarize_repo_state,
 )
+from ..repo_registry import RepoRegistry, check_presence
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,22 @@ SPECIALIST_SPECS: dict[str, SpecialistSpec] = {
             "Do not mutate the repo, execute patches, or approve risky work."
         ),
         allowed_surfaces=(
+            "repo.state",
+            "repo.map",
+            "repo.changed_files",
+            "repo.relevance",
+            "ledger.repo_activity",
+        ),
+    ),
+    "ixion-diagnostician": SpecialistSpec(
+        role="ixion-diagnostician",
+        constitution=(
+            "Inspect the Ixion robotics-vp-core repo through the registry. "
+            "Refuse to run if the repo is not registered or not present on disk. "
+            "Do not mutate, patch, or approve anything."
+        ),
+        allowed_surfaces=(
+            "registry.ixion",
             "repo.state",
             "repo.map",
             "repo.changed_files",
@@ -88,7 +105,80 @@ def run_specialist(
             context=context,
             repo_path=repo_path,
         )
+    if role == "ixion-diagnostician":
+        return _run_ixion_diagnostician(
+            settings,
+            spec=spec,
+            goal=goal,
+            context=context,
+        )
     raise ValueError(f"Unsupported specialist role: {role}")
+
+
+def _run_ixion_diagnostician(
+    settings: Settings,
+    *,
+    spec: SpecialistSpec,
+    goal: str,
+    context: str,
+) -> str:
+    """Ixion-scoped diagnostician. Refuses to run if the repo is absent."""
+    registry = RepoRegistry.load(Path(settings.repo_root))
+    entry = registry.find("ixion")
+    if entry is None:
+        return _render_specialist_report(
+            title="Ixion Diagnostician",
+            spec=spec,
+            goal=goal,
+            summary="Refused: 'ixion' is not in the repo registry.",
+            evidence=[
+                f"Registry source: {registry.source_path}",
+                f"Known repos: {', '.join(e.name for e in registry.repos) or '(none)'}",
+            ],
+            recommendations=[
+                "Add an 'ixion' entry to config/repos.json before invoking this specialist.",
+            ],
+            provenance=[f"registry={registry.source_path}"],
+            context=context,
+        )
+
+    presence = check_presence(entry)
+    if not presence.ready_for_mutation and not presence.exists:
+        return _render_specialist_report(
+            title="Ixion Diagnostician",
+            spec=spec,
+            goal=goal,
+            summary=(
+                f"Refused: Ixion repo is not present on disk "
+                f"({presence.missing_reason or 'absent'})."
+            ),
+            evidence=[
+                f"Registry source: {registry.source_path}",
+                f"Declared path: {entry.path}",
+                f"Resolved path: {presence.resolved_path}",
+                f"Missing reason: {presence.missing_reason or '(unknown)'}",
+            ],
+            recommendations=[
+                "Place the robotics-vp-core checkout at the registered path, "
+                "or update config/repos.json before invoking this specialist.",
+            ],
+            provenance=[
+                f"registry={registry.source_path}",
+                f"expected_path={entry.path}",
+            ],
+            context=context,
+        )
+
+    report = _run_repo_diagnostician(
+        settings,
+        spec=spec,
+        goal=goal,
+        context=context,
+        repo_path=presence.resolved_path,
+    )
+    # Retitle so it reads as the Ixion specialist even though the body
+    # is produced by the shared repo-diagnostician machinery.
+    return report.replace("# Repo Diagnostician", "# Ixion Diagnostician", 1)
 
 
 def _run_rate_limit_triage(

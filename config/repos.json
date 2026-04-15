@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "description": "hermes-node operator repo registry. Authoritative list of repos the operator can act on. Human-edited, git-tracked. Paths may use ~ for the service user's home. Absence of a path is OK — the registry reports `present=false` and the operator refuses mutation for that entry, which is the fail-closed behavior we want. Future repos should be added to `future_slots` until they have a real path, then promoted into `repos`.",
+  "repos": [
+    {
+      "name": "hermes-node",
+      "path": "~/apps/hermes-node",
+      "aliases": ["hermes_node", "hn"],
+      "description": "hermes-node substrate and operator (this repo).",
+      "tags": ["substrate", "self"],
+      "status": "active",
+      "allowed_kinds": ["summary", "research", "repo_read", "repo_patch_branch"],
+      "branch_policy": {
+        "default_branch": "main",
+        "allow_direct_main_mutation": false,
+        "branch_prefix": "hermes-node/auto/",
+        "require_clean_worktree": true
+      },
+      "specialist_roles": ["repo-diagnostician"]
+    },
+    {
+      "name": "ixion",
+      "path": "~/robotics-vp-core",
+      "aliases": ["robotics-vp-core", "robotics-vp", "vp-core"],
+      "description": "Ixion robotics VP core repo. Local dev target; VPS presence is not required and absence is the expected state there.",
+      "tags": ["robotics", "external"],
+      "status": "active",
+      "allowed_kinds": ["summary", "research", "repo_read", "repo_patch_branch"],
+      "branch_policy": {
+        "default_branch": "main",
+        "allow_direct_main_mutation": false,
+        "branch_prefix": "ixion/auto/",
+        "require_clean_worktree": true
+      },
+      "specialist_roles": ["ixion-diagnostician", "repo-diagnostician"]
+    }
+  ],
+  "future_slots": [
+    {
+      "name": "treasuryos",
+      "description": "TreasuryOS — future repo, not yet live anywhere. Placeholder slot so registry shape is stable when the repo materializes.",
+      "status": "planned",
+      "expected_tags": ["treasury", "external"],
+      "expected_specialist_roles": ["treasuryos-diagnostician"],
+      "notes": "Do not fabricate a path. Promote into `repos` once the repo exists on disk and is git-tracked."
+    }
+  ]
+}

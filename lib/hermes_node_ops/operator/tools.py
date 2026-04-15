@@ -37,6 +37,21 @@ from .harness import (
     write_todo_items,
 )
 from .harness.specialists import SPECIALIST_ROLES
+from .patch_proposal import (
+    create_proposal,
+    list_proposals,
+    load_proposal,
+    update_proposal_state,
+)
+from .repo_registry import (
+    RepoRegistry,
+    check_presence,
+    list_all_worktrees,
+    list_presence,
+    list_worktrees_for_entry,
+    render_entry,
+    render_registry,
+)
 from .repo_awareness import (
     compare_repo_to_last_successful_run,
     diagnose_failed_task,
@@ -746,6 +761,184 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_registered_repos",
+            "description": (
+                "List all repos in the operator repo registry with presence/readiness "
+                "metadata. Authoritative answer to 'what repos can I act on?'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_repo_registry_entry",
+            "description": (
+                "Look up a single registered repo by name or alias and return its "
+                "declared metadata plus a live presence probe."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name_or_alias": {
+                        "type": "string",
+                        "description": "Registered name or alias",
+                    },
+                },
+                "required": ["name_or_alias"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grounded_repo_summary",
+            "description": (
+                "Produce a grounded summary of a registered repo: registry metadata, "
+                "presence probe, repo-aware state/change/map summaries, and recent "
+                "ledger activity. Refuses if the repo is absent or unregistered."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name_or_alias": {
+                        "type": "string",
+                        "description": "Registered name or alias",
+                    },
+                },
+                "required": ["name_or_alias"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_active_worktrees",
+            "description": (
+                "List active git worktrees for a registered repo (or all registered "
+                "repos if name is omitted). Wraps `git worktree list --porcelain`."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name_or_alias": {
+                        "type": "string",
+                        "description": "Optional registered name or alias; omit for all repos",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_patch_proposal",
+            "description": (
+                "Write a reviewable patch proposal artifact under the current session. "
+                "Must exist before submit_patch_from_proposal can fire. Proposal is "
+                "gated on a registered, present repo."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_name": {
+                        "type": "string",
+                        "description": "Registered repo name or alias",
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": "Short statement of the patch intent",
+                    },
+                    "files_in_scope": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Files the patch is expected to touch",
+                    },
+                    "risk_notes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Explicit risks or blast-radius notes",
+                    },
+                    "provenance": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Evidence citations (receipts, files, prior runs)",
+                    },
+                    "branch": {
+                        "type": "string",
+                        "description": "Optional explicit branch name; auto-derived if omitted",
+                    },
+                },
+                "required": ["repo_name", "goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_patch_proposals",
+            "description": "List patch proposals for the current session.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_patch_from_proposal",
+            "description": (
+                "Submit a previously-written patch proposal as a repo_patch_branch task. "
+                "Enforces: repo registered, present, ready for mutation, branch policy "
+                "honored (no direct default-branch mutation). Creates the task via the "
+                "ledger and marks the proposal as submitted."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patch_id": {
+                        "type": "string",
+                        "description": "Proposal id from write_patch_proposal",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Optional prompt override; defaults to proposal goal",
+                    },
+                },
+                "required": ["patch_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "synthesize_patch_result",
+            "description": (
+                "Grounded post-run synthesis for a patch task. Reads the receipt and "
+                "workspace artifacts only — never free-form executor summary prose."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task id of the submitted patch",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
 ]
 
 
@@ -930,6 +1123,27 @@ class ToolExecutor:
         title: str = "",
         repo_path: str = "",
     ) -> dict[str, Any]:
+        if kind == "repo_patch_branch":
+            registry = RepoRegistry.load(self.repo_root)
+            entry = registry.find_by_path(repo_path) if repo_path else None
+            if entry is None:
+                return {
+                    "submitted": False,
+                    "error": (
+                        "repo_patch_branch refused: repo_path is not inside any "
+                        "registered repo. Register the repo in config/repos.json "
+                        "or use submit_patch_from_proposal."
+                    ),
+                }
+            presence = check_presence(entry)
+            if not presence.ready_for_mutation:
+                return {
+                    "submitted": False,
+                    "error": (
+                        f"repo_patch_branch refused: repo '{entry.name}' is not "
+                        f"ready for mutation ({presence.missing_reason or 'not ready'})."
+                    ),
+                }
         require_approval = is_approval_required(kind)
         submission = TaskSubmission(
             kind=kind,
@@ -1268,6 +1482,264 @@ class ToolExecutor:
     def _tool_list_subagents(self) -> list[dict[str, Any]]:
         session_id = self._require_session()
         return list_subagents(self.repo_root, session_id)
+
+    # -- Repo registry tools --
+
+    def _tool_list_registered_repos(self) -> dict[str, Any]:
+        registry = RepoRegistry.load(self.repo_root)
+        return render_registry(registry)
+
+    def _tool_get_repo_registry_entry(self, name_or_alias: str) -> dict[str, Any]:
+        registry = RepoRegistry.load(self.repo_root)
+        entry = registry.find(name_or_alias)
+        if entry is None:
+            return {
+                "error": f"No registered repo for '{name_or_alias}'",
+                "known": sorted(e.name for e in registry.repos),
+            }
+        return render_entry(entry, check_presence(entry))
+
+    def _tool_grounded_repo_summary(self, name_or_alias: str) -> dict[str, Any]:
+        registry = RepoRegistry.load(self.repo_root)
+        entry = registry.find(name_or_alias)
+        if entry is None:
+            return {
+                "grounded": False,
+                "error": f"'{name_or_alias}' is not in the repo registry",
+                "known": sorted(e.name for e in registry.repos),
+            }
+        presence = check_presence(entry)
+        if not presence.exists or not presence.is_git:
+            return {
+                "grounded": False,
+                "error": (
+                    f"repo '{entry.name}' is not present on disk "
+                    f"({presence.missing_reason or 'absent'})"
+                ),
+                "entry": render_entry(entry, presence),
+            }
+        target = presence.resolved_path
+        result: dict[str, Any] = {
+            "grounded": True,
+            "entry": render_entry(entry, presence),
+            "state": summarize_repo_state(target, mode="brief"),
+            "changed_files": summarize_changed_files(target, mode="brief"),
+            "map": summarize_repo_map(target, max_depth=2, mode="brief"),
+        }
+        with Ledger(self.settings.ledger_db) as ledger:
+            result["activity"] = summarize_repo_activity(
+                self.repo_root, ledger, target, limit=3, mode="brief"
+            )
+        return result
+
+    def _tool_list_active_worktrees(self, name_or_alias: str = "") -> dict[str, Any]:
+        registry = RepoRegistry.load(self.repo_root)
+        if name_or_alias:
+            entry = registry.find(name_or_alias)
+            if entry is None:
+                return {"error": f"No registered repo for '{name_or_alias}'"}
+            records = list_worktrees_for_entry(entry)
+        else:
+            records = list_all_worktrees(registry)
+        return {
+            "count": len(records),
+            "worktrees": [r.to_dict() for r in records],
+        }
+
+    # -- Patch proposal tools --
+
+    def _tool_write_patch_proposal(
+        self,
+        repo_name: str,
+        goal: str,
+        files_in_scope: list[str] | None = None,
+        risk_notes: list[str] | None = None,
+        provenance: list[str] | None = None,
+        branch: str = "",
+    ) -> dict[str, Any]:
+        session_id = self._require_session()
+        registry = RepoRegistry.load(self.repo_root)
+        entry = registry.find(repo_name)
+        if entry is None:
+            return {
+                "written": False,
+                "error": f"'{repo_name}' is not in the repo registry",
+                "known": sorted(e.name for e in registry.repos),
+            }
+        presence = check_presence(entry)
+        if not presence.ready_for_mutation:
+            return {
+                "written": False,
+                "error": (
+                    f"repo '{entry.name}' is not ready for mutation "
+                    f"({presence.missing_reason or 'not ready'})"
+                ),
+            }
+        if not entry.allows_kind("repo_patch_branch"):
+            return {
+                "written": False,
+                "error": f"repo '{entry.name}' does not allow repo_patch_branch",
+            }
+        proposal = create_proposal(
+            self.repo_root,
+            session_id,
+            repo_name=entry.name,
+            repo_path=presence.resolved_path,
+            goal=goal,
+            branch_prefix=entry.branch_policy.branch_prefix,
+            baseline_head=presence.head,
+            files_in_scope=list(files_in_scope or []),
+            risk_notes=list(risk_notes or []),
+            provenance=list(provenance or []),
+            branch=branch,
+        )
+        # Enforce branch policy at write time too — fail fast.
+        policy = entry.branch_policy
+        if (
+            not policy.allow_direct_main_mutation
+            and proposal.branch == policy.default_branch
+        ):
+            return {
+                "written": False,
+                "error": (
+                    f"branch '{proposal.branch}' is the default branch for "
+                    f"'{entry.name}' and direct mutation is forbidden by policy"
+                ),
+            }
+        return {"written": True, "proposal": proposal.to_dict()}
+
+    def _tool_list_patch_proposals(self) -> list[dict[str, Any]]:
+        session_id = self._require_session()
+        return [p.to_dict() for p in list_proposals(self.repo_root, session_id)]
+
+    def _tool_submit_patch_from_proposal(
+        self,
+        patch_id: str,
+        prompt: str = "",
+    ) -> dict[str, Any]:
+        session_id = self._require_session()
+        proposal = load_proposal(self.repo_root, session_id, patch_id)
+        if proposal.state not in ("draft",):
+            return {
+                "submitted": False,
+                "error": f"proposal {patch_id} is in state '{proposal.state}', not draft",
+            }
+        registry = RepoRegistry.load(self.repo_root)
+        entry = registry.find(proposal.repo_name)
+        if entry is None:
+            return {
+                "submitted": False,
+                "error": f"proposal repo '{proposal.repo_name}' is no longer registered",
+            }
+        presence = check_presence(entry)
+        if not presence.ready_for_mutation:
+            return {
+                "submitted": False,
+                "error": (
+                    f"repo '{entry.name}' is not ready for mutation "
+                    f"({presence.missing_reason or 'not ready'})"
+                ),
+            }
+        policy = entry.branch_policy
+        if (
+            not policy.allow_direct_main_mutation
+            and proposal.branch == policy.default_branch
+        ):
+            return {
+                "submitted": False,
+                "error": (
+                    f"branch '{proposal.branch}' is the default branch and "
+                    f"direct mutation is forbidden by policy"
+                ),
+            }
+        if policy.require_clean_worktree and presence.dirty:
+            return {
+                "submitted": False,
+                "error": (
+                    f"repo '{entry.name}' has {presence.change_count} uncommitted "
+                    f"changes; policy requires a clean worktree"
+                ),
+            }
+        body = (prompt or proposal.goal).strip()
+        full_prompt = (
+            f"{body}\n\n"
+            f"[patch proposal {proposal.patch_id}]\n"
+            f"repo: {entry.name} ({proposal.repo_path})\n"
+            f"branch: {proposal.branch}\n"
+            f"baseline_head: {proposal.baseline_head or '(unknown)'}\n"
+            f"files_in_scope: {', '.join(proposal.files_in_scope) or '(exploratory)'}\n"
+        )
+        require_approval = is_approval_required("repo_patch_branch")
+        submission = TaskSubmission(
+            kind="repo_patch_branch",
+            prompt=full_prompt,
+            title=f"patch/{entry.name}: {proposal.goal[:60]}",
+            provider=self.settings.default_provider,
+            model=self.settings.default_model,
+            repo_path=proposal.repo_path,
+            require_approval=require_approval,
+            created_by="operator_llm",
+        )
+        with Ledger(self.settings.ledger_db) as ledger:
+            task = ledger.create_task(
+                submission, max_attempts=self.settings.max_attempts
+            )
+        updated = update_proposal_state(
+            self.repo_root,
+            session_id,
+            patch_id,
+            state="submitted",
+            task_id=task["id"],
+        )
+        return {
+            "submitted": True,
+            "task_id": task["id"],
+            "task_state": task["state"],
+            "approval_required": require_approval,
+            "proposal": updated.to_dict(),
+        }
+
+    def _tool_synthesize_patch_result(self, task_id: str) -> dict[str, Any]:
+        """Grounded post-run synthesis: receipts + workspace only, never prose."""
+        with Ledger(self.settings.ledger_db) as ledger:
+            task = ledger.get_task(task_id)
+            run = ledger.latest_run_for_task(task_id)
+        if not run:
+            return {
+                "grounded": False,
+                "error": f"no runs recorded for task {task_id}",
+                "task_state": task["state"],
+            }
+        run_dir = (
+            self.repo_root / "state" / "workspaces" / task_id / "runs" / run["id"]
+        )
+        receipt_path = run_dir / "receipt.json"
+        receipt: dict[str, Any] = {}
+        if receipt_path.exists():
+            try:
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                return {
+                    "grounded": False,
+                    "error": f"failed to read receipt: {exc}",
+                    "receipt_path": str(receipt_path),
+                }
+        workspace_manifest = read_workspace_manifest(self.repo_root, task_id)
+        return {
+            "grounded": bool(receipt),
+            "task_id": task_id,
+            "task_state": task["state"],
+            "run_id": run["id"],
+            "run_state": run["state"],
+            "exit_code": run.get("exit_code"),
+            "receipt": receipt,
+            "receipt_path": str(receipt_path) if receipt else "",
+            "workspace_manifest": workspace_manifest,
+            "note": (
+                "Synthesis is grounded in the receipt and workspace manifest only. "
+                "Any free-form executor summary is ignored by policy."
+            ),
+        }
 
     def _require_session(self) -> str:
         if not self.session_id:
