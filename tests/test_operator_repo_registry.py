@@ -23,7 +23,7 @@ from hermes_node_ops.operator.repo_registry import (
 
 
 def _git_init(path: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True)
     (path / "README").write_text("hi\n", encoding="utf-8")
