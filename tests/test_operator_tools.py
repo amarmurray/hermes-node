@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,7 @@ from hermes_node_ops.ledger import Ledger
 from hermes_node_ops.operator.session import create_session
 from hermes_node_ops.models import TaskSubmission
 from hermes_node_ops.operator.tools import TOOL_DEFINITIONS, ToolExecutor, get_tool_definitions
+from hermes_node_ops.workspaces import write_input_artifact, write_run_output, write_run_receipt
 
 
 def _make_settings() -> Settings:
@@ -47,6 +49,10 @@ class ToolDefinitionsTests(unittest.TestCase):
             "approve_task", "list_recent_tasks", "list_recent_runs",
             "inspect_workspace", "read_run_receipt", "get_routing_policy",
             "repo_ls", "repo_read_file", "repo_grep", "git_status",
+            "summarize_repo_map", "summarize_repo_state", "summarize_changed_files",
+            "find_repo_relevance", "summarize_repo_activity",
+            "compare_repo_to_last_successful_run", "diagnose_failed_task",
+            "prepare_patch_proposal_plan",
             "save_note", "write_plan", "read_plan", "update_plan",
             "write_todo", "update_todo", "complete_todo_item",
             "write_scratch", "read_scratch", "spawn_subagent",
@@ -260,6 +266,33 @@ class ToolDispatchTests(unittest.TestCase):
 
 
 class RepoToolTests(unittest.TestCase):
+    @staticmethod
+    def _git(repo: Path, *args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+
+    def _init_repo(self, root: Path) -> Path:
+        repo = root / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        self._git(repo, "init")
+        self._git(repo, "config", "user.email", "ops@example.com")
+        self._git(repo, "config", "user.name", "Hermes Node Tests")
+        (repo / "README.md").write_text("# Repo\n", encoding="utf-8")
+        (repo / "src").mkdir()
+        (repo / "src" / "repo_tools.py").write_text(
+            "def summarize_repo_state():\n    return 'ok'\n",
+            encoding="utf-8",
+        )
+        self._git(repo, "add", ".")
+        self._git(repo, "commit", "-m", "initial")
+        return repo
+
     def test_repo_ls(self) -> None:
         settings = _make_settings()
         executor = ToolExecutor(settings, settings.repo_root)
@@ -305,6 +338,125 @@ class RepoToolTests(unittest.TestCase):
             data = json.loads(result)
             # Should still return something (maybe empty branch)
             self.assertIn("repo_path", data)
+
+    def test_repo_awareness_tool_dispatch(self) -> None:
+        settings = _make_settings()
+        executor = ToolExecutor(settings, settings.repo_root)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = self._init_repo(Path(tmpdir))
+            (repo / "README.md").write_text("# Repo\n\nchanged\n", encoding="utf-8")
+            (repo / "notes.txt").write_text("note\n", encoding="utf-8")
+
+            with Ledger(settings.ledger_db) as ledger:
+                task = ledger.create_task(
+                    TaskSubmission(
+                        kind="repo_read",
+                        prompt="Inspect repo",
+                        repo_path=str(repo),
+                        provider="openrouter",
+                        model="openai/gpt-oss-20b:free",
+                    )
+                )
+                write_input_artifact(
+                    settings.repo_root,
+                    task["id"],
+                    kind=task["kind"],
+                    prompt=task["prompt"],
+                    provider=task["provider"],
+                    model=task["model"],
+                    repo_path=task["repo_path"],
+                    created_at=task["created_at"],
+                    workspace_dir=task["workspace_dir"],
+                )
+                _, run = ledger.begin_run(
+                    task["id"],
+                    command=["hermes", "chat"],
+                    working_dir=str(repo),
+                    provider=task["provider"],
+                    model=task["model"],
+                    max_turns=2,
+                    executor="hermes_chat",
+                )
+                ledger.finish_run(
+                    run["id"],
+                    exit_code=2,
+                    stdout="partial",
+                    stderr="boom\ntrace\n",
+                    duration_ms=11,
+                )
+                finished_run = ledger.get_run(run["id"])
+                ledger.add_summary(
+                    task["id"],
+                    run_id=run["id"],
+                    content="repo read failed",
+                )
+                write_run_output(
+                    settings.repo_root,
+                    task["id"],
+                    run["id"],
+                    stdout="partial",
+                    stderr="boom\ntrace\n",
+                    workspace_dir=task["workspace_dir"],
+                )
+                write_run_receipt(
+                    settings.repo_root,
+                    task["id"],
+                    run["id"],
+                    exit_code=2,
+                    duration_ms=11,
+                    executor="hermes_chat",
+                    provider=task["provider"],
+                    model=task["model"],
+                    state="failed",
+                    created_at=run["created_at"],
+                    started_at=run["started_at"],
+                    finished_at=finished_run["finished_at"],
+                    working_dir=str(repo),
+                    command=["hermes", "chat"],
+                    workspace_dir=task["workspace_dir"],
+                )
+
+            state = json.loads(executor.dispatch("summarize_repo_state", {"repo_path": str(repo)}))
+            self.assertIn("summary", state)
+
+            changed = json.loads(executor.dispatch("summarize_changed_files", {"repo_path": str(repo), "mode": "full"}))
+            self.assertTrue(changed["details"]["dirty"])
+
+            relevance = json.loads(
+                executor.dispatch(
+                    "find_repo_relevance",
+                    {"repo_path": str(repo), "query": "repo state", "mode": "full"},
+                )
+            )
+            self.assertGreaterEqual(len(relevance["details"]["matches"]), 1)
+
+            activity = json.loads(
+                executor.dispatch(
+                    "summarize_repo_activity",
+                    {"repo_path": str(repo), "mode": "full"},
+                )
+            )
+            self.assertEqual(activity["details"]["tasks"][0]["id"], task["id"])
+
+            diagnosis = json.loads(
+                executor.dispatch(
+                    "diagnose_failed_task",
+                    {"task_id": task["id"], "mode": "full"},
+                )
+            )
+            self.assertIn("failed", diagnosis["summary"])
+
+            plan = json.loads(
+                executor.dispatch(
+                    "prepare_patch_proposal_plan",
+                    {
+                        "repo_path": str(repo),
+                        "goal": "Improve repo diagnostics",
+                        "mode": "full",
+                    },
+                )
+            )
+            self.assertEqual(plan["details"]["suggested_submission"]["kind"], "repo_patch_branch")
 
 
 if __name__ == "__main__":

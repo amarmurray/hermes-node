@@ -11,7 +11,7 @@ from ...config import Settings
 from ...jsonl import utcnow
 from ...models import new_id
 from ..session import session_dir
-from .specialists import SPECIALIST_ROLES, run_specialist
+from .specialists import SPECIALIST_ROLES, get_specialist_spec, run_specialist
 
 
 TODO_LINE_RE = re.compile(r"^- \[(?P<done>[ xX])\] (?P<item_id>t\d+): (?P<text>.+)$")
@@ -158,13 +158,21 @@ def spawn_subagent(
     """Create and run a bounded child subagent under the parent session."""
     if role not in SPECIALIST_ROLES:
         raise ValueError(f"Unsupported subagent role: {role}")
+    spec = get_specialist_spec(role)
 
     root = ensure_harness_layout(repo_root, session_id)
     subagent_id = new_id("subagent")
     subdir = root / "subagents" / subagent_id
     subdir.mkdir(parents=True, exist_ok=True)
 
-    prompt = _build_subagent_prompt(role=role, goal=goal, context=context, repo_path=repo_path)
+    prompt = _build_subagent_prompt(
+        role=role,
+        goal=goal,
+        context=context,
+        repo_path=repo_path,
+        constitution=spec.constitution,
+        allowed_surfaces=spec.allowed_surfaces,
+    )
     (subdir / "prompt.md").write_text(prompt, encoding="utf-8")
     _append_subagent_thread(subdir, role="user", content=prompt)
 
@@ -182,7 +190,9 @@ def spawn_subagent(
             "approval": "forbidden",
             "mutation": "forbidden",
             "routing_bypass": "forbidden",
+            "allowed_surfaces": list(spec.allowed_surfaces),
         },
+        "constitution": spec.constitution,
     }
     _write_context(subdir, metadata)
 
@@ -290,12 +300,16 @@ def _build_subagent_prompt(
     goal: str,
     context: str,
     repo_path: str,
+    constitution: str,
+    allowed_surfaces: tuple[str, ...],
 ) -> str:
     lines = [
         f"# Subagent {role}",
         "",
         f"Goal: {goal.strip()}",
         "Policy: read-only, no approvals, no routing bypass, no direct execution.",
+        f"Constitution: {constitution}",
+        "Allowed surfaces: " + ", ".join(allowed_surfaces),
     ]
     if repo_path.strip():
         lines.append(f"Repo Path: {Path(repo_path).expanduser().resolve()}")

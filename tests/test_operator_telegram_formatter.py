@@ -154,6 +154,18 @@ def test_format_tool_result_compact_submit_task() -> None:
     assert "submitted task_xyz" in out
 
 
+def test_format_tool_result_compact_summary_payload() -> None:
+    result = json.dumps(
+        {
+            "summary": "Repo is dirty with two changed files.",
+            "provenance": ["repo=/tmp/repo", "baseline_run=run_1"],
+        }
+    )
+    out = format_tool_result_compact("summarize_repo_state", result)
+    assert "Repo is dirty" in out
+    assert "repo=/tmp/repo" in out
+
+
 def test_format_tool_result_compact_invalid_json() -> None:
     out = format_tool_result_compact("whatever", "not-json")
     assert out.startswith("[whatever]")

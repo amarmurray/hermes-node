@@ -196,6 +196,11 @@ def format_tool_result_compact(name: str, result: str) -> str:
         if data.get("approved"):
             return f"approved {data.get('task_id','?')} -> {data.get('new_state','?')}"
         return f"not approved: {data.get('error','?')}"
+    if isinstance(data, dict) and data.get("summary"):
+        summary = str(data.get("summary", "")).strip()
+        if data.get("provenance"):
+            return summary + "\n" + " ".join(str(item) for item in data["provenance"][:3])
+        return summary
 
     # Generic fallback: compact JSON
     return f"[{name}] " + json.dumps(data, separators=(",", ":"))[:600]

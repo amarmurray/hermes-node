@@ -37,6 +37,16 @@ from .harness import (
     write_todo_items,
 )
 from .harness.specialists import SPECIALIST_ROLES
+from .repo_awareness import (
+    compare_repo_to_last_successful_run,
+    diagnose_failed_task,
+    find_repo_relevance,
+    prepare_patch_proposal_plan,
+    summarize_changed_files,
+    summarize_repo_activity,
+    summarize_repo_map,
+    summarize_repo_state,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +315,210 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["repo_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "summarize_repo_map",
+            "description": "Summarize repository structure: top-level layout and bounded tree sample.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the repository or repo subdirectory",
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Max tree depth to inspect (default 2)",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["brief", "full", "evidence"],
+                        "description": "Render mode for concise or more detailed output",
+                    },
+                },
+                "required": ["repo_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "summarize_repo_state",
+            "description": "Summarize current branch, HEAD, cleanliness, and recent commits for a repo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the repository or repo subdirectory",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["brief", "full", "evidence"],
+                        "description": "Render mode for concise or more detailed output",
+                    },
+                },
+                "required": ["repo_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "summarize_changed_files",
+            "description": "Summarize staged, unstaged, renamed, deleted, and untracked files in a repo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the repository or repo subdirectory",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["brief", "full", "evidence"],
+                        "description": "Render mode for concise or more detailed output",
+                    },
+                },
+                "required": ["repo_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_repo_relevance",
+            "description": "Find files likely relevant to a repo question using file paths and grep-style evidence.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the repository or repo subdirectory",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Question, topic, symbol, or phrase to locate",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max file matches to return (default 8)",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["brief", "full", "evidence"],
+                        "description": "Render mode for concise or more detailed output",
+                    },
+                },
+                "required": ["repo_path", "query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "summarize_repo_activity",
+            "description": "Summarize recent hermes-node tasks, runs, and workspaces for a repo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the repository or repo subdirectory",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max tasks/runs/workspaces to inspect (default 5)",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["brief", "full", "evidence"],
+                        "description": "Render mode for concise or more detailed output",
+                    },
+                },
+                "required": ["repo_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "compare_repo_to_last_successful_run",
+            "description": "Compare current repo state to the last successful hermes-node run for that repo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the repository or repo subdirectory",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "description": "Optional task kind filter for the baseline successful run",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["brief", "full", "evidence"],
+                        "description": "Render mode for concise or more detailed output",
+                    },
+                },
+                "required": ["repo_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "diagnose_failed_task",
+            "description": "Diagnose a failed or suspicious task using runs, events, summaries, and workspace receipts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The task ID to diagnose",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["brief", "full", "evidence"],
+                        "description": "Render mode for concise or more detailed output",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "prepare_patch_proposal_plan",
+            "description": "Prepare a bounded patch proposal plan without mutating the repo or submitting a task yet.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Path to the repository or repo subdirectory",
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": "Bounded patch objective",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max relevant files to surface (default 8)",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["brief", "full", "evidence"],
+                        "description": "Render mode for concise or more detailed output",
+                    },
+                },
+                "required": ["repo_path", "goal"],
             },
         },
     },
@@ -893,6 +1107,97 @@ class ToolExecutor:
             info["error"] = f"Git command failed: {exc}"
 
         return info
+
+    def _tool_summarize_repo_map(
+        self,
+        repo_path: str,
+        max_depth: int = 2,
+        mode: str = "brief",
+    ) -> dict[str, Any]:
+        return summarize_repo_map(repo_path, max_depth=max_depth, mode=mode)
+
+    def _tool_summarize_repo_state(
+        self,
+        repo_path: str,
+        mode: str = "brief",
+    ) -> dict[str, Any]:
+        return summarize_repo_state(repo_path, mode=mode)
+
+    def _tool_summarize_changed_files(
+        self,
+        repo_path: str,
+        mode: str = "brief",
+    ) -> dict[str, Any]:
+        return summarize_changed_files(repo_path, mode=mode)
+
+    def _tool_find_repo_relevance(
+        self,
+        repo_path: str,
+        query: str,
+        limit: int = 8,
+        mode: str = "brief",
+    ) -> dict[str, Any]:
+        return find_repo_relevance(repo_path, query, limit=limit, mode=mode)
+
+    def _tool_summarize_repo_activity(
+        self,
+        repo_path: str,
+        limit: int = 5,
+        mode: str = "brief",
+    ) -> dict[str, Any]:
+        with Ledger(self.settings.ledger_db) as ledger:
+            return summarize_repo_activity(
+                self.repo_root,
+                ledger,
+                repo_path,
+                limit=limit,
+                mode=mode,
+            )
+
+    def _tool_compare_repo_to_last_successful_run(
+        self,
+        repo_path: str,
+        kind: str = "",
+        mode: str = "brief",
+    ) -> dict[str, Any]:
+        with Ledger(self.settings.ledger_db) as ledger:
+            return compare_repo_to_last_successful_run(
+                self.repo_root,
+                ledger,
+                repo_path,
+                kind=kind,
+                mode=mode,
+            )
+
+    def _tool_diagnose_failed_task(
+        self,
+        task_id: str,
+        mode: str = "brief",
+    ) -> dict[str, Any]:
+        with Ledger(self.settings.ledger_db) as ledger:
+            return diagnose_failed_task(
+                self.repo_root,
+                ledger,
+                task_id,
+                mode=mode,
+            )
+
+    def _tool_prepare_patch_proposal_plan(
+        self,
+        repo_path: str,
+        goal: str,
+        limit: int = 8,
+        mode: str = "brief",
+    ) -> dict[str, Any]:
+        with Ledger(self.settings.ledger_db) as ledger:
+            return prepare_patch_proposal_plan(
+                self.repo_root,
+                ledger,
+                repo_path,
+                goal,
+                limit=limit,
+                mode=mode,
+            )
 
     def _tool_save_note(self, note: str) -> dict[str, Any]:
         if not self.session_id:

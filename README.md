@@ -90,6 +90,26 @@ Guardrails:
 - `repo_read` uses `--worktree` automatically when the target path looks like a git checkout
 - no wrapper path enables `--yolo`
 
+## Repo-aware operator bundle
+
+The operator now has a read-only repo-awareness layer on top of the existing
+ledger, workspaces, and repo inspection tools.
+
+It can:
+
+- summarize repo structure and current branch/worktree state
+- summarize changed files and likely relevant files for a question
+- compare current repo state to the last successful hermes-node run
+- summarize recent workspaces and receipts for one repo
+- diagnose a failed task from its run/events/workspace trail
+- prepare a bounded patch proposal plan without mutating the repo
+
+This stays inside the same membrane:
+
+- no new ingress
+- no direct repo mutation
+- no bypass of ledger, approvals, routing, or workspaces
+
 ## Ledger model
 
 The local SQLite ledger persists:

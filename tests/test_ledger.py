@@ -74,6 +74,50 @@ class LedgerTests(unittest.TestCase):
                 self.assertEqual(task["max_attempts"], 3)
                 self.assertIsNone(task["next_attempt_at"])
 
+    def test_repo_queries_return_recent_tasks_runs_and_latest_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "ledger.db"
+            repo_path = str((Path(tmpdir) / "repo").resolve())
+            with Ledger(db_path) as ledger:
+                task = ledger.create_task(
+                    TaskSubmission(kind="repo_read", prompt="Inspect repo", repo_path=repo_path)
+                )
+                _, run = ledger.begin_run(
+                    task["id"],
+                    command=["hermes", "chat"],
+                    working_dir=repo_path,
+                    provider="openrouter",
+                    model="openai/gpt-oss-20b:free",
+                    max_turns=2,
+                    executor="hermes_chat",
+                )
+                ledger.finish_run(
+                    run["id"],
+                    exit_code=0,
+                    stdout="ok",
+                    stderr="",
+                    duration_ms=25,
+                )
+                ledger.add_summary(
+                    task["id"],
+                    run_id=run["id"],
+                    content="repo looks healthy",
+                )
+
+                tasks = ledger.recent_tasks_for_repo(repo_path, limit=5)
+                runs = ledger.recent_runs_for_repo(repo_path, limit=5)
+                latest = ledger.latest_successful_run_for_repo(repo_path)
+
+                self.assertEqual(len(tasks), 1)
+                self.assertEqual(tasks[0]["id"], task["id"])
+                self.assertEqual(len(runs), 1)
+                self.assertEqual(runs[0]["id"], run["id"])
+                self.assertIsNotNone(latest)
+                assert latest is not None
+                self.assertEqual(latest["task"]["id"], task["id"])
+                self.assertEqual(latest["run"]["id"], run["id"])
+                self.assertEqual(latest["summary"]["content"], "repo looks healthy")
+
 
 class DeferralTests(unittest.TestCase):
     def test_defer_task_rate_limit(self) -> None:

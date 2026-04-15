@@ -655,6 +655,95 @@ class Ledger:
         ).fetchall()
         return [self._decode_run(row) for row in rows]
 
+    def recent_tasks_for_repo(self, repo_path: str, limit: int = 10) -> list[dict[str, Any]]:
+        candidates = self._repo_path_candidates(repo_path)
+        placeholders = ", ".join("?" for _ in candidates)
+        rows = self._conn.execute(
+            f"SELECT * FROM tasks WHERE repo_path IN ({placeholders}) ORDER BY created_at DESC LIMIT ?",
+            (*candidates, limit),
+        ).fetchall()
+        return [self._decode_task(row) for row in rows]
+
+    def recent_runs_for_repo(
+        self,
+        repo_path: str,
+        *,
+        limit: int = 10,
+        state: str = "",
+    ) -> list[dict[str, Any]]:
+        candidates = self._repo_path_candidates(repo_path)
+        placeholders = ", ".join("?" for _ in candidates)
+        query = """
+            SELECT runs.* FROM runs
+            JOIN tasks ON tasks.id = runs.task_id
+            WHERE tasks.repo_path IN ({placeholders})
+        """
+        query = query.format(placeholders=placeholders)
+        params: list[Any] = list(candidates)
+        if state:
+            query += " AND runs.state = ?"
+            params.append(state)
+        query += " ORDER BY runs.started_at DESC LIMIT ?"
+        params.append(limit)
+        rows = self._conn.execute(query, tuple(params)).fetchall()
+        return [self._decode_run(row) for row in rows]
+
+    def latest_successful_run_for_repo(
+        self,
+        repo_path: str,
+        *,
+        kind: str = "",
+    ) -> dict[str, Any] | None:
+        candidates = self._repo_path_candidates(repo_path)
+        placeholders = ", ".join("?" for _ in candidates)
+        query = """
+            SELECT
+                tasks.id AS task_id,
+                runs.id AS run_id
+            FROM runs
+            JOIN tasks ON tasks.id = runs.task_id
+            WHERE tasks.repo_path IN ({placeholders})
+              AND runs.state = ?
+        """
+        query = query.format(placeholders=placeholders)
+        params: list[Any] = [*candidates, TASK_STATE_DONE]
+        if kind:
+            query += " AND tasks.kind = ?"
+            params.append(kind)
+        query += " ORDER BY runs.finished_at DESC LIMIT 1"
+        row = self._conn.execute(query, tuple(params)).fetchone()
+        if row is None:
+            return None
+        task = self.get_task(row["task_id"])
+        run = self.get_run(row["run_id"])
+        summary = self.latest_summary(run_id=run["id"])
+        return {"task": task, "run": run, "summary": summary}
+
+    @staticmethod
+    def _repo_path_candidates(repo_path: str) -> tuple[str, ...]:
+        raw = repo_path.strip()
+        if not raw:
+            return ("",)
+        candidates: list[str] = [raw]
+        try:
+            resolved = str(Path(raw).expanduser().resolve())
+        except OSError:
+            resolved = raw
+        if resolved not in candidates:
+            candidates.append(resolved)
+
+        for value in tuple(candidates):
+            if value.startswith("/private/"):
+                alt = value.removeprefix("/private")
+                if alt not in candidates:
+                    candidates.append(alt)
+            elif value.startswith("/var/"):
+                alt = f"/private{value}"
+                if alt not in candidates:
+                    candidates.append(alt)
+
+        return tuple(candidates)
+
     def deferred_tasks(self, limit: int = 10) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM tasks WHERE state = ? ORDER BY next_attempt_at ASC LIMIT ?",

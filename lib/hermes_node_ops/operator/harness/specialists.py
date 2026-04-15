@@ -1,24 +1,71 @@
 """Bounded specialist subagents for the operator harness.
 
-These are not a second control plane. They are small, file-backed,
-policy-constrained helpers that produce durable artifacts for the
-parent operator session to inspect.
+These specialists are file-backed inspection organs under the operator.
+They are read-only, policy-constrained, and route every conclusion back
+through the parent operator.
 """
 
 from __future__ import annotations
 
-import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from ...config import Settings
 from ...ledger import Ledger
 from ...wrapper import format_status_snapshot
-
-
-SPECIALIST_ROLES = (
-    "rate-limit-triage",
-    "repo-diagnostician",
+from ..repo_awareness import (
+    find_repo_relevance,
+    summarize_changed_files,
+    summarize_repo_activity,
+    summarize_repo_map,
+    summarize_repo_state,
 )
+
+
+@dataclass(frozen=True)
+class SpecialistSpec:
+    role: str
+    constitution: str
+    allowed_surfaces: tuple[str, ...]
+
+
+SPECIALIST_SPECS: dict[str, SpecialistSpec] = {
+    "rate-limit-triage": SpecialistSpec(
+        role="rate-limit-triage",
+        constitution=(
+            "Inspect queue pressure, cooldowns, and deferrals. "
+            "Do not replay tasks, change routing, or approve anything."
+        ),
+        allowed_surfaces=(
+            "ledger.queue_snapshot",
+            "ledger.cooldowns",
+            "ledger.rate_limit_events",
+        ),
+    ),
+    "repo-diagnostician": SpecialistSpec(
+        role="repo-diagnostician",
+        constitution=(
+            "Inspect repository structure, git state, ledger history, and file relevance. "
+            "Do not mutate the repo, execute patches, or approve risky work."
+        ),
+        allowed_surfaces=(
+            "repo.state",
+            "repo.map",
+            "repo.changed_files",
+            "repo.relevance",
+            "ledger.repo_activity",
+        ),
+    ),
+}
+
+SPECIALIST_ROLES = tuple(SPECIALIST_SPECS)
+
+
+def get_specialist_spec(role: str) -> SpecialistSpec:
+    try:
+        return SPECIALIST_SPECS[role]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported specialist role: {role}") from exc
 
 
 def run_specialist(
@@ -30,16 +77,24 @@ def run_specialist(
     repo_path: str = "",
 ) -> str:
     """Execute a bounded specialist and return its markdown result."""
+    spec = get_specialist_spec(role)
     if role == "rate-limit-triage":
-        return _run_rate_limit_triage(settings, goal=goal, context=context)
+        return _run_rate_limit_triage(settings, spec=spec, goal=goal, context=context)
     if role == "repo-diagnostician":
-        return _run_repo_diagnostician(settings, goal=goal, context=context, repo_path=repo_path)
+        return _run_repo_diagnostician(
+            settings,
+            spec=spec,
+            goal=goal,
+            context=context,
+            repo_path=repo_path,
+        )
     raise ValueError(f"Unsupported specialist role: {role}")
 
 
 def _run_rate_limit_triage(
     settings: Settings,
     *,
+    spec: SpecialistSpec,
     goal: str,
     context: str,
 ) -> str:
@@ -50,70 +105,59 @@ def _run_rate_limit_triage(
     cooldowns = snapshot.get("active_cooldowns", []) or []
     events = snapshot.get("recent_rate_limit_events", []) or []
 
-    lines = [
-        "# Rate-Limit Triage",
-        "",
+    summary = (
+        f"Rate-limit surface: {len(cooldowns)} active cooldowns, "
+        f"{len(deferred)} deferred tasks, {len(events)} recent signals."
+    )
+    evidence = [
         f"Goal: {goal}",
+        f"Allowed surfaces: {', '.join(spec.allowed_surfaces)}",
     ]
     if context.strip():
-        lines.extend(["", "Context:", context.strip()])
+        evidence.append("Context: " + context.strip())
+    for task in deferred[:5]:
+        evidence.append(
+            f"Deferred task {task.get('id', '?')} [{task.get('kind', '?')}] "
+            f"next_attempt_at={task.get('next_attempt_at', '?')}"
+        )
+    for cooldown in cooldowns[:5]:
+        evidence.append(
+            f"Cooldown {cooldown.get('cooldown_key', '?')} until "
+            f"{cooldown.get('cooldown_until', '?')}"
+        )
+    for event in events[:5]:
+        evidence.append(
+            f"Signal {event.get('created_at', '?')}: {event.get('message', '').strip()}"
+        )
 
-    lines.extend(
+    recommendations = (
         [
-            "",
-            "## Current State",
-            f"- Active cooldowns: {len(cooldowns)}",
-            f"- Deferred tasks: {len(deferred)}",
-            f"- Recent rate-limit events: {len(events)}",
+            "Keep retries inside hermes-node backoff boundaries.",
+            "Prefer waiting for cooldown expiry over ad hoc replays.",
+            "If pressure persists, change routing deliberately rather than bypassing policy.",
         ]
+        if (cooldowns or deferred or events)
+        else ["No active rate-limit pressure is visible in the ledger right now."]
     )
 
-    if deferred:
-        lines.append("")
-        lines.append("## Deferred Tasks")
-        for task in deferred[:5]:
-            lines.append(
-                f"- {task.get('id', '?')} [{task.get('kind', '?')}] "
-                f"next_attempt_at={task.get('next_attempt_at', '?')}"
-            )
-
-    if cooldowns:
-        lines.append("")
-        lines.append("## Active Cooldowns")
-        for cooldown in cooldowns[:5]:
-            key = cooldown.get("cooldown_key", "?")
-            until = cooldown.get("cooldown_until", "?")
-            reason = cooldown.get("reason", "")
-            suffix = f" reason={reason}" if reason else ""
-            lines.append(f"- {key} until {until}{suffix}")
-
-    if events:
-        lines.append("")
-        lines.append("## Recent Signals")
-        for event in events[:5]:
-            lines.append(
-                f"- {event.get('created_at', '?')}: "
-                f"{event.get('message', '').strip()}"
-            )
-
-    lines.extend(["", "## Recommendation"])
-    if cooldowns or deferred or events:
-        lines.extend(
-            [
-                "- Keep retries inside hermes-node backoff boundaries.",
-                "- Prefer waiting for cooldown expiry over ad hoc replays.",
-                "- If this persists, narrow provider/model usage through routing rather than bypassing policy.",
-            ]
-        )
-    else:
-        lines.append("- No active rate-limit pressure is visible in the ledger right now.")
-
-    return "\n".join(lines).strip() + "\n"
+    return _render_specialist_report(
+        title="Rate-Limit Triage",
+        spec=spec,
+        goal=goal,
+        summary=summary,
+        evidence=evidence,
+        recommendations=recommendations,
+        provenance=[
+            f"ledger={settings.ledger_db}",
+            f"repo_root={settings.repo_root}",
+        ],
+    )
 
 
 def _run_repo_diagnostician(
     settings: Settings,
     *,
+    spec: SpecialistSpec,
     goal: str,
     context: str,
     repo_path: str,
@@ -124,85 +168,97 @@ def _run_repo_diagnostician(
     if target.is_file():
         target = target.parent
 
+    with Ledger(settings.ledger_db) as ledger:
+        repo_state = summarize_repo_state(str(target), mode="full")
+        changed = summarize_changed_files(str(target), mode="full")
+        repo_map = summarize_repo_map(str(target), max_depth=2, mode="full")
+        activity = summarize_repo_activity(
+            settings.repo_root,
+            ledger,
+            str(target),
+            limit=3,
+            mode="full",
+        )
+        relevance = find_repo_relevance(
+            str(target),
+            query="\n".join(piece for piece in (goal.strip(), context.strip()) if piece).strip(),
+            limit=5,
+            mode="full",
+        )
+
+    summary_parts = [repo_state["summary"]]
+    if changed["summary"]:
+        summary_parts.append(changed["summary"])
+    if relevance["summary"]:
+        summary_parts.append(relevance["summary"])
+
+    evidence = [
+        f"Allowed surfaces: {', '.join(spec.allowed_surfaces)}",
+        repo_map["summary"],
+        activity["summary"],
+    ]
+    evidence.extend(repo_state.get("evidence", [])[:3])
+    evidence.extend(changed.get("evidence", [])[:3])
+    evidence.extend(relevance.get("evidence", [])[:3])
+
+    recommendations = [
+        "Use repo-aware tools to inspect the scoped files before proposing mutation.",
+        "Keep any mutation request routed through hermes-node submission and approval.",
+        "Cite workspace and receipt provenance when comparing current state to prior runs.",
+    ]
+
+    return _render_specialist_report(
+        title="Repo Diagnostician",
+        spec=spec,
+        goal=goal,
+        summary=" ".join(part for part in summary_parts if part).strip(),
+        evidence=evidence,
+        recommendations=recommendations,
+        provenance=[
+            f"repo={target}",
+            f"ledger={settings.ledger_db}",
+            *repo_state.get("provenance", [])[:2],
+            *activity.get("provenance", [])[:2],
+        ],
+        context=context,
+    )
+
+
+def _render_specialist_report(
+    *,
+    title: str,
+    spec: SpecialistSpec,
+    goal: str,
+    summary: str,
+    evidence: list[str],
+    recommendations: list[str],
+    provenance: list[str],
+    context: str = "",
+) -> str:
     lines = [
-        "# Repo Diagnostician",
+        f"# {title}",
         "",
         f"Goal: {goal}",
-        f"Repository: {target}",
+        f"Constitution: {spec.constitution}",
     ]
     if context.strip():
         lines.extend(["", "Context:", context.strip()])
-
-    if not (target / ".git").exists():
-        lines.extend(
-            [
-                "",
-                "## State",
-                "- This path is not a git checkout.",
-            ]
-        )
-        return "\n".join(lines).strip() + "\n"
-
-    branch = _run_git(target, ["rev-parse", "--abbrev-ref", "HEAD"])
-    status = _run_git(target, ["status", "--porcelain"])
-    recent = _run_git(target, ["log", "--oneline", "-5"])
-
     lines.extend(
         [
             "",
-            "## Git State",
-            f"- Branch: {branch[0] if branch else '?'}",
-            f"- Dirty: {'yes' if status else 'no'}",
-        ]
-    )
-
-    if status:
-        lines.append("")
-        lines.append("## Changes")
-        for line in status[:10]:
-            lines.append(f"- {line}")
-
-    if recent:
-        lines.append("")
-        lines.append("## Recent Commits")
-        for line in recent[:5]:
-            lines.append(f"- {line}")
-
-    try:
-        entries = sorted(
-            entry.name for entry in target.iterdir()
-            if entry.name != ".git"
-        )[:12]
-    except OSError:
-        entries = []
-
-    if entries:
-        lines.append("")
-        lines.append("## Top-Level Entries")
-        for entry in entries:
-            lines.append(f"- {entry}")
-
-    lines.extend(
-        [
+            "## Summary",
+            summary.strip() or "(no summary)",
             "",
-            "## Recommendation",
-            "- Keep any mutation requests routed through hermes-node task submission and approvals.",
+            "## Evidence",
         ]
     )
-
+    for item in evidence[:12]:
+        lines.append(f"- {item}")
+    lines.extend(["", "## Recommendation"])
+    for item in recommendations:
+        lines.append(f"- {item}")
+    lines.extend(["", "## Provenance"])
+    for item in provenance:
+        if item:
+            lines.append(f"- {item}")
     return "\n".join(lines).strip() + "\n"
-
-
-def _run_git(repo_path: Path, args: list[str]) -> list[str]:
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    return [line for line in result.stdout.strip().splitlines() if line.strip()]

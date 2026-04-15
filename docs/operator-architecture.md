@@ -96,6 +96,25 @@ Task execution happens through the existing queue worker (`hermes-node run --wat
 | `repo_read_file` | Read file contents (bounded) |
 | `repo_grep` | Search for patterns |
 | `git_status` | Branch, dirty state, recent commits |
+| `summarize_repo_map` | Concise repo tree and layout summary |
+| `summarize_repo_state` | Branch, HEAD, cleanliness, recent commits |
+| `summarize_changed_files` | Staged/unstaged/untracked summary |
+| `find_repo_relevance` | File relevance helper for repo questions |
+| `summarize_repo_activity` | Recent tasks, runs, workspaces, receipts per repo |
+| `compare_repo_to_last_successful_run` | Current repo state vs last successful repo run |
+| `diagnose_failed_task` | Failure diagnosis from runs, events, and workspace receipts |
+| `prepare_patch_proposal_plan` | Bounded mutation plan without submitting or mutating |
+
+## Golden workflows
+
+The operator can now handle a first useful repo workflow loop without leaving
+the membrane:
+
+1. answer a repo-structure question
+2. summarize current branch/worktree state
+3. compare current repo state to the last successful run
+4. diagnose a failed task from its artifact trail
+5. prepare a bounded patch proposal plan for later approval/routing
 
 ### Session tools
 | Tool | Description |

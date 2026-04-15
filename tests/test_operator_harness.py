@@ -125,7 +125,8 @@ class SubagentTests(unittest.TestCase):
         self.assertEqual(spawned["status"], "completed")
         result = read_subagent_result(settings.repo_root, sid, spawned["subagent_id"])
         self.assertIn("# Repo Diagnostician", result["result"])
-        self.assertIn("## Git State", result["result"])
+        self.assertIn("## Summary", result["result"])
+        self.assertIn("Allowed surfaces:", result["result"])
 
 
 if __name__ == "__main__":
