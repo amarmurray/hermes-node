@@ -18,6 +18,11 @@ from typing import Any
 from ..config import Settings
 from .backend import AssistantMessage, ChatBackend, ToolCall
 from .constitution import build_system_prompt
+from .harness import (
+    list_subagents,
+    read_plan,
+    read_todo_markdown,
+)
 from .session import (
     append_message,
     build_messages_for_backend,
@@ -43,7 +48,7 @@ def run_repl(
 
     print(f"hermes-node operator ({backend.model_name})")
     print(f"session: {sid}")
-    print("type /quit to exit, /status for queue, /sessions to list, /notes to view notes")
+    print("type /quit to exit, /status for queue, /plan and /todo for harness state")
     print()
 
     # Set up readline history
@@ -266,6 +271,30 @@ def _handle_slash_command(
             print("(no notes)")
         return ""
 
+    if cmd == "/plan":
+        plan = read_plan(repo_root, session_id).strip()
+        print(plan if plan else "(no plan)")
+        return ""
+
+    if cmd == "/todo":
+        todo = read_todo_markdown(repo_root, session_id).strip()
+        print(todo if todo else "(no todo)")
+        return ""
+
+    if cmd == "/subagents":
+        subagents = list_subagents(repo_root, session_id)
+        if not subagents:
+            print("(no subagents)")
+            return ""
+        for subagent in subagents[:10]:
+            print(
+                f"  {subagent.get('subagent_id','?')} "
+                f"[{subagent.get('status','?')}] "
+                f"{subagent.get('role','?')} "
+                f"{subagent.get('goal','')}"
+            )
+        return ""
+
     if cmd == "/note" and arg:
         from .session import append_note
         append_note(repo_root, session_id, arg)
@@ -273,7 +302,7 @@ def _handle_slash_command(
         return ""
 
     if cmd == "/help":
-        print("commands: /quit /status /sessions /notes /note <text> /help")
+        print("commands: /quit /status /sessions /notes /plan /todo /subagents /note <text> /help")
         return ""
 
     print(f"unknown command: {cmd}")

@@ -4,6 +4,8 @@ The operator is a resident cognitive layer that sits on top of hermes-node.
 It talks to the human, reads hermes-node state, decides what kind of task
 something is, invokes hermes-node tools to act, and reports back.
 
+Canonical stack map: [stack-evolution.md](stack-evolution.md)
+
 ## Topology
 
 ```

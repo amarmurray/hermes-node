@@ -126,6 +126,43 @@ def format_run_list(runs: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_plan_text(content: str) -> str:
+    """Format plan.md content for Telegram."""
+    content = content.strip()
+    if not content:
+        return "(no plan)"
+    if len(content) > 3500:
+        return content[:3500] + "..."
+    return content
+
+
+def format_todo_text(content: str) -> str:
+    """Format todo.md content for Telegram."""
+    content = content.strip()
+    if not content:
+        return "(no todo)"
+    if len(content) > 3500:
+        return content[:3500] + "..."
+    return content
+
+
+def format_subagent_list(subagents: list[dict[str, Any]]) -> str:
+    """Format session subagents compactly."""
+    if not subagents:
+        return "no subagents"
+    lines = ["subagents:"]
+    for subagent in subagents[:10]:
+        lines.append(
+            f"  {_short(subagent.get('subagent_id',''))} "
+            f"[{subagent.get('status','?')}] "
+            f"{subagent.get('role','?')}"
+        )
+        goal = (subagent.get("goal") or "").strip()
+        if goal:
+            lines.append(f"    {goal[:120]}")
+    return "\n".join(lines)
+
+
 def format_tool_result_compact(name: str, result: str) -> str:
     """Format a tool result for inline display in the conversation."""
     try:
@@ -144,6 +181,15 @@ def format_tool_result_compact(name: str, result: str) -> str:
         return format_task_list(data, header="recent tasks")
     if name == "list_recent_runs":
         return format_run_list(data if isinstance(data, list) else [])
+    if name == "read_plan" and isinstance(data, dict):
+        return format_plan_text(data.get("content", ""))
+    if name == "list_subagents":
+        return format_subagent_list(data if isinstance(data, list) else [])
+    if name == "spawn_subagent" and isinstance(data, dict):
+        return (
+            f"spawned {data.get('subagent_id','?')} "
+            f"[{data.get('status','?')}] {data.get('role','?')}"
+        )
     if name == "submit_task" and isinstance(data, dict):
         return f"submitted {data.get('task_id','?')} [{data.get('state','?')}]"
     if name == "approve_task" and isinstance(data, dict):

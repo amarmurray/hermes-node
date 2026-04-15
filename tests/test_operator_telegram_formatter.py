@@ -9,10 +9,13 @@ from hermes_node_ops.operator.telegram.formatter import (
     format_alert,
     format_assistant_response,
     format_pending_approvals,
+    format_plan_text,
     format_queue_status,
     format_run_list,
+    format_subagent_list,
     format_task_list,
     format_task_status,
+    format_todo_text,
     format_tool_result_compact,
 )
 
@@ -109,10 +112,34 @@ def test_format_run_list() -> None:
     assert "ok" in out
 
 
+def test_format_plan_and_todo_text() -> None:
+    assert "no plan" in format_plan_text("")
+    assert "Plan" in format_plan_text("# Plan\n\nDo work")
+    assert "no todo" in format_todo_text("")
+    assert "Todo" in format_todo_text("# Todo\n\n- [ ] t1: check")
+
+
+def test_format_subagent_list() -> None:
+    assert "no subagents" in format_subagent_list([])
+    out = format_subagent_list(
+        [{"subagent_id": "subagent_abc", "status": "completed", "role": "rate-limit-triage", "goal": "check queue"}]
+    )
+    assert "subagents:" in out
+    assert "rate-limit-triage" in out
+
+
 def test_format_tool_result_compact_dispatch_queue() -> None:
     result = json.dumps({"counts": {"queued": 3}})
     out = format_tool_result_compact("get_queue_status", result)
     assert "queued=3" in out
+
+
+def test_format_tool_result_compact_subagent() -> None:
+    out = format_tool_result_compact(
+        "spawn_subagent",
+        json.dumps({"subagent_id": "subagent_1", "status": "completed", "role": "repo-diagnostician"}),
+    )
+    assert "spawned subagent_1" in out
 
 
 def test_format_tool_result_compact_error_passthrough() -> None:

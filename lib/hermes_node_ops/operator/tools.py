@@ -22,6 +22,21 @@ from ..models import APPROVAL_GRANTED, SUPPORTED_TASK_KINDS, TaskSubmission
 from ..routing import format_route_table, is_approval_required
 from ..workspaces import list_workspaces, read_workspace_manifest
 from ..wrapper import format_status_snapshot
+from .harness import (
+    complete_todo_item,
+    ensure_harness_layout,
+    list_subagents,
+    read_plan,
+    read_scratch,
+    read_subagent_result,
+    spawn_subagent,
+    update_plan,
+    update_todo_item,
+    write_plan,
+    write_scratch,
+    write_todo_items,
+)
+from .harness.specialists import SPECIALIST_ROLES
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +325,213 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_plan",
+            "description": "Write the current session plan to plan.md.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Full markdown plan content",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_plan",
+            "description": "Read the current session plan.md.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_plan",
+            "description": "Append an update block to the current session plan.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Plan update content to append",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_todo",
+            "description": "Write or append checklist items in todo.md.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Checklist item texts",
+                    },
+                    "replace": {
+                        "type": "boolean",
+                        "description": "Replace the current todo instead of appending",
+                    },
+                },
+                "required": ["items"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_todo",
+            "description": "Update the text for one todo item by id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {
+                        "type": "string",
+                        "description": "Todo item id such as t1",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Replacement text",
+                    },
+                },
+                "required": ["item_id", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_todo_item",
+            "description": "Mark one todo item complete by id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {
+                        "type": "string",
+                        "description": "Todo item id such as t1",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional completion note",
+                    },
+                },
+                "required": ["item_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_scratch",
+            "description": "Write a scratchpad file for one step of work.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "step_id": {
+                        "type": "string",
+                        "description": "Scratch step identifier",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Scratch markdown content",
+                    },
+                },
+                "required": ["step_id", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_scratch",
+            "description": "Read a scratchpad file by step id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "step_id": {
+                        "type": "string",
+                        "description": "Scratch step identifier",
+                    },
+                },
+                "required": ["step_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_subagent",
+            "description": "Run a bounded specialist subagent under the current session.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "role": {
+                        "type": "string",
+                        "enum": list(SPECIALIST_ROLES),
+                        "description": "Specialist role",
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": "Focused bounded objective for the subagent",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional additional context",
+                    },
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Optional repository path for repo-oriented work",
+                    },
+                },
+                "required": ["role", "goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_subagent_result",
+            "description": "Read a completed subagent result by id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subagent_id": {
+                        "type": "string",
+                        "description": "Subagent id",
+                    },
+                },
+                "required": ["subagent_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_subagents",
+            "description": "List the current session's subagents.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -324,6 +546,8 @@ class ToolExecutor:
         self.settings = settings
         self.repo_root = repo_root
         self.session_id = session_id
+        if session_id:
+            ensure_harness_layout(repo_root, session_id)
 
     def dispatch(self, name: str, arguments: dict[str, Any]) -> str:
         """Dispatch a tool call and return the result as a string."""
@@ -676,6 +900,74 @@ class ToolExecutor:
         from .session import append_note
         append_note(self.repo_root, self.session_id, note)
         return {"saved": True, "note": note}
+
+    def _tool_write_plan(self, content: str) -> dict[str, Any]:
+        session_id = self._require_session()
+        plan = write_plan(self.repo_root, session_id, content)
+        return {"written": True, "content": plan}
+
+    def _tool_read_plan(self) -> dict[str, Any]:
+        session_id = self._require_session()
+        return {"content": read_plan(self.repo_root, session_id)}
+
+    def _tool_update_plan(self, content: str) -> dict[str, Any]:
+        session_id = self._require_session()
+        plan = update_plan(self.repo_root, session_id, content)
+        return {"updated": True, "content": plan}
+
+    def _tool_write_todo(self, items: list[str], replace: bool = False) -> dict[str, Any]:
+        session_id = self._require_session()
+        todo = write_todo_items(self.repo_root, session_id, items, replace=replace)
+        return {"written": True, "items": todo}
+
+    def _tool_update_todo(self, item_id: str, text: str) -> dict[str, Any]:
+        session_id = self._require_session()
+        item = update_todo_item(self.repo_root, session_id, item_id, text)
+        return {"updated": True, "item": item}
+
+    def _tool_complete_todo_item(self, item_id: str, note: str = "") -> dict[str, Any]:
+        session_id = self._require_session()
+        item = complete_todo_item(self.repo_root, session_id, item_id, note=note)
+        return {"completed": True, "item": item}
+
+    def _tool_write_scratch(self, step_id: str, content: str) -> dict[str, Any]:
+        session_id = self._require_session()
+        return write_scratch(self.repo_root, session_id, step_id, content)
+
+    def _tool_read_scratch(self, step_id: str) -> dict[str, Any]:
+        session_id = self._require_session()
+        return read_scratch(self.repo_root, session_id, step_id)
+
+    def _tool_spawn_subagent(
+        self,
+        role: str,
+        goal: str,
+        context: str = "",
+        repo_path: str = "",
+    ) -> dict[str, Any]:
+        session_id = self._require_session()
+        return spawn_subagent(
+            self.settings,
+            self.repo_root,
+            session_id,
+            role=role,
+            goal=goal,
+            context=context,
+            repo_path=repo_path,
+        )
+
+    def _tool_read_subagent_result(self, subagent_id: str) -> dict[str, Any]:
+        session_id = self._require_session()
+        return read_subagent_result(self.repo_root, session_id, subagent_id)
+
+    def _tool_list_subagents(self) -> list[dict[str, Any]]:
+        session_id = self._require_session()
+        return list_subagents(self.repo_root, session_id)
+
+    def _require_session(self) -> str:
+        if not self.session_id:
+            raise ValueError("No active session for harness operation")
+        return self.session_id
 
 
 def _compact_property_schema(schema: dict[str, Any]) -> dict[str, Any]:

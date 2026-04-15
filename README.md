@@ -1,4 +1,4 @@
-# hermes-node v0.3
+# hermes-node v0.6
 
 `hermes-node` is a thin operator wrapper around the already-working upstream [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) install on the VPS.
 
@@ -38,6 +38,10 @@ Not implemented here.
 The intended next step is wrapper CLI ingress first, then a local-only API ingress later if needed.
 
 ## Roadmap
+
+Canonical topology and phase map:
+
+- [docs/stack-evolution.md](docs/stack-evolution.md)
 
 Stack evolution:
 
@@ -111,6 +115,7 @@ The wrapper also writes structured JSONL records to `logs/hermes-node.jsonl` and
 ├── docs/
 │   ├── operator-ops.md
 │   ├── routing-policy.md
+│   ├── stack-evolution.md
 │   └── upstream-notes.md
 ├── lib/
 │   └── hermes_node_ops/

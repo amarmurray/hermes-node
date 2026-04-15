@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from hermes_node_ops.config import Settings
 from hermes_node_ops.ledger import Ledger
+from hermes_node_ops.operator.session import create_session
 from hermes_node_ops.models import TaskSubmission
 from hermes_node_ops.operator.tools import TOOL_DEFINITIONS, ToolExecutor, get_tool_definitions
 
@@ -46,7 +47,10 @@ class ToolDefinitionsTests(unittest.TestCase):
             "approve_task", "list_recent_tasks", "list_recent_runs",
             "inspect_workspace", "read_run_receipt", "get_routing_policy",
             "repo_ls", "repo_read_file", "repo_grep", "git_status",
-            "save_note",
+            "save_note", "write_plan", "read_plan", "update_plan",
+            "write_todo", "update_todo", "complete_todo_item",
+            "write_scratch", "read_scratch", "spawn_subagent",
+            "read_subagent_result", "list_subagents",
         }
         self.assertTrue(expected.issubset(names), f"Missing tools: {expected - names}")
 
@@ -190,6 +194,43 @@ class ToolDispatchTests(unittest.TestCase):
         data = json.loads(result)
         self.assertFalse(data["approved"])
         self.assertIn("error", data)
+
+    def test_harness_tools_roundtrip(self) -> None:
+        settings = _make_settings()
+        sid = create_session(settings.repo_root, model="test-model")
+        executor = ToolExecutor(settings, settings.repo_root, session_id=sid)
+
+        result = executor.dispatch("write_plan", {"content": "Three-step plan"})
+        self.assertTrue(json.loads(result)["written"])
+
+        result = executor.dispatch("read_plan", {})
+        self.assertIn("Three-step plan", json.loads(result)["content"])
+
+        result = executor.dispatch("write_todo", {"items": ["check queue", "spawn helper"], "replace": True})
+        data = json.loads(result)
+        self.assertEqual(len(data["items"]), 2)
+        self.assertEqual(data["items"][0]["item_id"], "t1")
+
+        result = executor.dispatch("update_todo", {"item_id": "t1", "text": "check queue carefully"})
+        self.assertEqual(json.loads(result)["item"]["text"], "check queue carefully")
+
+        result = executor.dispatch("complete_todo_item", {"item_id": "t2", "note": "done"})
+        self.assertTrue(json.loads(result)["completed"])
+
+        result = executor.dispatch("write_scratch", {"step_id": "triage", "content": "scratch text"})
+        self.assertEqual(json.loads(result)["step_id"], "triage")
+
+        result = executor.dispatch("spawn_subagent", {"role": "rate-limit-triage", "goal": "Inspect queue pressure"})
+        spawned = json.loads(result)
+        self.assertEqual(spawned["status"], "completed")
+
+        result = executor.dispatch("list_subagents", {})
+        listed = json.loads(result)
+        self.assertEqual(len(listed), 1)
+
+        result = executor.dispatch("read_subagent_result", {"subagent_id": spawned["subagent_id"]})
+        loaded = json.loads(result)
+        self.assertIn("# Rate-Limit Triage", loaded["result"])
 
     def test_list_recent_tasks(self) -> None:
         settings = _make_settings()

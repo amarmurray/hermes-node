@@ -20,6 +20,7 @@ from ...jsonl import append_jsonl, utcnow
 from ...ledger import Ledger
 from ..backend import ChatBackend, ToolCall, create_backend
 from ..constitution import build_system_prompt
+from ..harness import list_subagents, read_plan, read_todo_markdown
 from ..session import (
     append_message,
     build_messages_for_backend,
@@ -32,9 +33,12 @@ from .formatter import (
     format_alert,
     format_assistant_response,
     format_pending_approvals,
+    format_plan_text,
     format_queue_status,
     format_task_list,
     format_task_status,
+    format_subagent_list,
+    format_todo_text,
     format_tool_result_compact,
 )
 
@@ -172,6 +176,9 @@ class TelegramBot:
                 "  /approve <id> — approve a pending task\n"
                 "  /task <id> — task detail\n"
                 "  /runs — recent runs\n"
+                "  /plan — current harness plan\n"
+                "  /todo — current harness todo\n"
+                "  /subagents — bounded specialist runs\n"
                 "  /new — start a fresh session\n"
                 "  /session — show current session id\n"
                 "  /help — this message\n\n"
@@ -182,7 +189,7 @@ class TelegramBot:
         if cmd == "/help":
             self.client.send_message(
                 update.chat_id,
-                "commands: /status /pending /approve <id> /task <id> /runs /new /session",
+                "commands: /status /pending /approve <id> /task <id> /runs /plan /todo /subagents /new /session",
             )
             return
 
@@ -251,6 +258,21 @@ class TelegramBot:
                 self.client.send_message(update.chat_id, format_run_list(runs))
             except Exception:
                 self.client.send_message(update.chat_id, raw[:3500])
+            return
+
+        if cmd == "/plan":
+            sid = self._session_id_for_chat(update.chat_id)
+            self.client.send_message(update.chat_id, format_plan_text(read_plan(self.repo_root, sid)))
+            return
+
+        if cmd == "/todo":
+            sid = self._session_id_for_chat(update.chat_id)
+            self.client.send_message(update.chat_id, format_todo_text(read_todo_markdown(self.repo_root, sid)))
+            return
+
+        if cmd == "/subagents":
+            sid = self._session_id_for_chat(update.chat_id)
+            self.client.send_message(update.chat_id, format_subagent_list(list_subagents(self.repo_root, sid)))
             return
 
         if cmd == "/new":

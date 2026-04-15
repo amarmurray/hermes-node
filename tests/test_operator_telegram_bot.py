@@ -170,6 +170,16 @@ class SlashCommandTests(unittest.TestCase):
         text = self.client.sent[-1][1]
         self.assertIn("queue:", text)
 
+    def test_plan_todo_and_subagents_commands(self) -> None:
+        self.bot._handle_update(_message_update(1001, "/plan"))
+        self.assertIn("Plan", self.client.sent[-1][1])
+
+        self.bot._handle_update(_message_update(1001, "/todo"))
+        self.assertIn("Todo", self.client.sent[-1][1])
+
+        self.bot._handle_update(_message_update(1001, "/subagents"))
+        self.assertIn("no subagents", self.client.sent[-1][1])
+
     def test_approve_without_arg_reports_usage(self) -> None:
         self.bot._handle_update(_message_update(1001, "/approve"))
         self.assertIn("usage:", self.client.sent[-1][1])
