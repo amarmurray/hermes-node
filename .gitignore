@@ -9,6 +9,9 @@ state/*.db-wal
 state/*.sqlite3
 state/workspaces/
 state/operator_sessions/
+state/telegram_update_offset.json
+state/telegram_alert_cursor.json
+state/telegram_session_*.txt
 logs/*.jsonl
 !logs/.gitkeep
 !state/.gitkeep
