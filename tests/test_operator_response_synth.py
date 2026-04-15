@@ -30,6 +30,12 @@ class ResponseSynthTests(unittest.TestCase):
         self.assertIn("clean", out.text)
         self.assertIn("stripped think blocks", out.notes)
 
+    def test_strips_slash_think_tokens(self) -> None:
+        out = synthesize_assistant_text("ALIVE /think\nThe queue is quiet.")
+        self.assertNotIn("/think", out.text)
+        self.assertIn("ALIVE", out.text)
+        self.assertIn("stripped slash-think tokens", out.notes)
+
     def test_strips_canned_preamble(self) -> None:
         text = "Sure, let me check that for you.\n\nThe registry shows two repos."
         out = synthesize_assistant_text(text)

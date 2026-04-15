@@ -69,6 +69,7 @@ _BARE_TAGS = re.compile(
     r"<\s*/?\s*(think|thinking|scratch|scratchpad|reflection)\s*>",
     re.IGNORECASE,
 )
+_SLASH_THINK = re.compile(r"(?<!\S)/(think|thinking|scratch|reflection)\b", re.IGNORECASE)
 
 # Preambles that small models love and humans hate.
 _PREAMBLE_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -191,6 +192,9 @@ def synthesize_assistant_text(
     if _BARE_TAGS.search(text):
         text = _BARE_TAGS.sub("", text)
         notes.append("stripped bare think tags")
+    if _SLASH_THINK.search(text):
+        text = _SLASH_THINK.sub("", text)
+        notes.append("stripped slash-think tokens")
 
     # 2. If the entire payload is just JSON, the model likely echoed a tool
     #    result instead of synthesizing an answer. Convert it to a short
