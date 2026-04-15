@@ -20,7 +20,7 @@
     },
     {
       "name": "ixion",
-      "path": "~/robotics-vp-core",
+      "path": "~/apps/robotics-vp-core",
       "aliases": ["robotics-vp-core", "robotics-vp", "vp-core"],
       "description": "Ixion robotics VP core repo. Local dev target; VPS presence is not required and absence is the expected state there.",
       "tags": ["robotics", "external"],
