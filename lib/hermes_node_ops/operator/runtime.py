@@ -25,6 +25,39 @@ from .session import append_message, build_messages_for_backend, read_notes
 from .tools import ToolExecutor, get_tool_definitions
 
 
+def _estimate_context_pressure(
+    system_prompt: str,
+    messages: list[dict],
+    *,
+    token_budget: int = 4096,  # conservative estimate for small models
+) -> tuple[str, float]:
+    """Estimate context pressure from prompt + message history.
+
+    Returns (level, ratio) where level is "low" | "medium" | "high"
+    and ratio is estimated_tokens / token_budget.
+
+    Uses a rough 4-chars-per-token heuristic (conservative for English).
+    """
+    total_chars = len(system_prompt)
+    for m in messages:
+        content = m.get("content", "")
+        if isinstance(content, str):
+            total_chars += len(content)
+        # Tool calls and results can be large
+        for tc in m.get("tool_calls", []):
+            args = tc.get("function", {}).get("arguments", "")
+            total_chars += len(str(args))
+
+    estimated_tokens = total_chars / 4
+    ratio = estimated_tokens / token_budget if token_budget else 0
+
+    if ratio > 0.8:
+        return "high", ratio
+    elif ratio > 0.5:
+        return "medium", ratio
+    return "low", ratio
+
+
 ToolCallHook = Callable[[ToolCall], None]
 ToolResultHook = Callable[[str, str], None]
 AssistantHook = Callable[[str], None]
@@ -55,6 +88,8 @@ class TurnEffects:
     plan_touched: bool = False
     todo_touched: bool = False
     scratch_touched: bool = False
+    context_pressure: str = ""
+    context_pressure_ratio: float = 0.0
     project_repo_name: str = ""
     project_branch: str = ""
 
@@ -81,6 +116,8 @@ class TurnEffects:
             "plan_touched": self.plan_touched,
             "todo_touched": self.todo_touched,
             "scratch_touched": self.scratch_touched,
+            "context_pressure": self.context_pressure,
+            "context_pressure_ratio": self.context_pressure_ratio,
             "project_repo_name": self.project_repo_name,
             "project_branch": self.project_branch,
             "approval_needed": self.approval_needed,
@@ -167,9 +204,21 @@ def run_operator_turn(
     )
     tools = tool_defs if tool_defs is not None else get_tool_definitions()
 
+    # Context pressure estimation — adaptive degradation for small models.
+    pressure_level, pressure_ratio = _estimate_context_pressure(
+        system_prompt, messages,
+    )
+    if pressure_level == "high":
+        max_tool_rounds = min(max_tool_rounds, 4)
+        if response_mode == "natural":
+            response_mode = "brief"
+
     tool_refs: list[ToolResultRef] = []
     tool_trace: list[ToolExecutionRecord] = []
-    effects = TurnEffects()
+    effects = TurnEffects(
+        context_pressure=pressure_level,
+        context_pressure_ratio=pressure_ratio,
+    )
     if project_ctx is not None:
         effects.project_repo_name = project_ctx.repo_name
         effects.project_branch = project_ctx.branch

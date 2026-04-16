@@ -9,6 +9,7 @@ The harness is additive to the existing operator session model:
 No new database tables. All state stays under the parent session directory.
 """
 
+from .specialists import render_specialist_manifest
 from .store import (
     complete_todo_item,
     ensure_harness_layout,
@@ -35,6 +36,7 @@ __all__ = [
     "read_subagent_result",
     "read_todo_items",
     "read_todo_markdown",
+    "render_specialist_manifest",
     "spawn_subagent",
     "update_plan",
     "update_todo_item",

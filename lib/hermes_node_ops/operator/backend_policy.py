@@ -97,6 +97,15 @@ class BackendDescriptor:
     def is_configured(self) -> bool:
         return bool(self.base_url and self.model)
 
+    @property
+    def timeout_category(self) -> str:
+        """Classify timeout for degradation decisions."""
+        if self.timeout_seconds <= 30:
+            return "fast"
+        elif self.timeout_seconds <= 90:
+            return "normal"
+        return "slow"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "slot": self.slot.value,

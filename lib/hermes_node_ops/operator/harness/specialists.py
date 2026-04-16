@@ -29,6 +29,13 @@ class SpecialistSpec:
     role: str
     constitution: str
     allowed_surfaces: tuple[str, ...]
+    # Phase 5 additions:
+    read_only: bool = True
+    risk_class: str = "read_only"   # "read_only" | "write_bounded" | "write_unbounded"
+    autonomy_eligible: bool = False  # eligible for future scheduled/triggered runs
+    trigger_events: tuple[str, ...] = ()  # event categories this specialist may respond to
+    purpose: str = ""  # one-line human summary
+    callable_only: bool = True  # True = only invoked explicitly; False = may be triggered later
 
 
 SPECIALIST_SPECS: dict[str, SpecialistSpec] = {
@@ -43,6 +50,12 @@ SPECIALIST_SPECS: dict[str, SpecialistSpec] = {
             "ledger.cooldowns",
             "ledger.rate_limit_events",
         ),
+        read_only=True,
+        risk_class="read_only",
+        autonomy_eligible=True,
+        trigger_events=("rate_limit_hit", "schedule_tick"),
+        callable_only=True,
+        purpose="Diagnose rate-limit patterns from ledger history",
     ),
     "repo-diagnostician": SpecialistSpec(
         role="repo-diagnostician",
@@ -57,6 +70,12 @@ SPECIALIST_SPECS: dict[str, SpecialistSpec] = {
             "repo.relevance",
             "ledger.repo_activity",
         ),
+        read_only=True,
+        risk_class="read_only",
+        autonomy_eligible=True,
+        trigger_events=("repo_state_changed", "schedule_tick"),
+        callable_only=True,
+        purpose="Assess repo health, branch state, and workspace artifacts",
     ),
     "patch-review": SpecialistSpec(
         role="patch-review",
@@ -74,6 +93,12 @@ SPECIALIST_SPECS: dict[str, SpecialistSpec] = {
             "inspect_repo_relevance",
             "get_repo_state",
         ),
+        read_only=True,
+        risk_class="read_only",
+        autonomy_eligible=False,
+        trigger_events=("task_completed",),
+        callable_only=True,
+        purpose="Review patch proposals without mutating",
     ),
     "ixion-diagnostician": SpecialistSpec(
         role="ixion-diagnostician",
@@ -90,10 +115,37 @@ SPECIALIST_SPECS: dict[str, SpecialistSpec] = {
             "repo.relevance",
             "ledger.repo_activity",
         ),
+        read_only=True,
+        risk_class="read_only",
+        autonomy_eligible=True,
+        trigger_events=("repo_state_changed", "schedule_tick"),
+        callable_only=True,
+        purpose="Diagnose Ixion registry presence and repo state",
     ),
 }
 
 SPECIALIST_ROLES = tuple(SPECIALIST_SPECS)
+
+
+def render_specialist_manifest() -> dict:
+    """Render structured registry of all specialists for schedulers/tools."""
+    return {
+        "specialists": [
+            {
+                "role": spec.role,
+                "purpose": spec.purpose,
+                "read_only": spec.read_only,
+                "risk_class": spec.risk_class,
+                "autonomy_eligible": spec.autonomy_eligible,
+                "trigger_events": list(spec.trigger_events),
+                "callable_only": spec.callable_only,
+                "allowed_surfaces": list(spec.allowed_surfaces),
+            }
+            for spec in SPECIALIST_SPECS.values()
+        ],
+        "total": len(SPECIALIST_SPECS),
+        "autonomy_eligible_count": sum(1 for s in SPECIALIST_SPECS.values() if s.autonomy_eligible),
+    }
 
 
 def get_specialist_spec(role: str) -> SpecialistSpec:

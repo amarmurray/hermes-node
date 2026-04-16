@@ -222,6 +222,7 @@ class SpecialistOutcome:
     subagent_id: str = ""
     receipt_path: str = ""
     error: str = ""
+    trigger_source: str = ""  # empty = manual invocation; future: event category that triggered this
 
 
 def invoke_specialist_once(

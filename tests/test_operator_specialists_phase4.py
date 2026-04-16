@@ -37,6 +37,14 @@ class Phase4SpecialistTests(unittest.TestCase):
     def test_enforce_unknown_role_is_false(self) -> None:
         self.assertFalse(enforce_allowed_surfaces("unknown-role", "anything"))
 
+    def test_repo_diagnostician_autonomy_eligible(self) -> None:
+        spec = get_specialist_spec("repo-diagnostician")
+        self.assertTrue(spec.autonomy_eligible)
+
+    def test_patch_review_not_autonomy_eligible(self) -> None:
+        spec = get_specialist_spec("patch-review")
+        self.assertFalse(spec.autonomy_eligible)
+
     def test_patch_review_not_found_report(self) -> None:
         report = run_specialist(
             "patch-review",

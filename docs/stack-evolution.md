@@ -22,12 +22,14 @@ Use it to orient future work without re-deriving the stack boundary.
 
 ## Phase ladder
 
-1. v0.5 Telegram wedge
-2. v0.6 Deep-Agents-style operator harness
-3. later callable specialist suboperators
-4. later selectively autonomized specialist suboperators
-5. later Temporal above Hermes-node
-6. later Mini App on top of the same operator surface
+1. v0.5 Telegram wedge ✓
+2. v0.6 Deep-Agents-style operator harness ✓
+3. v0.7 Runtime seam and response synthesis ✓
+4. v0.8 Project memory and callable specialists ✓
+5. v0.9 Specialist hardening, trigger scaffolding, runtime pressure relief ✓
+6. later selectively autonomized specialist suboperators
+7. later Temporal above Hermes-node
+8. later Mini App on top of the same operator surface
 
 ## What belongs where
 
