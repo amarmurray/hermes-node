@@ -73,10 +73,16 @@ PROMPTS: list[dict] = [
     {
         "id": "repo_state_chained",
         "prompt": "what is the current branch and status of the ixion repo?",
-        "expect_tools": ["get_repo_state", "check_repo_presence"],
+        "expect_tools": [
+            "get_repo_state",
+            "check_repo_presence",
+            "get_repo_registry_entry",
+            "inspect_repo_map",
+            "list_registered_repos",
+        ],
         "expect_no_narration": True,
         "category": "multi_tool",
-        "note": "May use get_repo_state or check_repo_presence",
+        "note": "Any repo-inspection tool counts — get_repo_state, check_repo_presence, get_repo_registry_entry, etc.",
     },
     {
         "id": "narration_trap",
