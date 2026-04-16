@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ...config import Settings
 from ...ledger import Ledger
@@ -57,6 +58,23 @@ SPECIALIST_SPECS: dict[str, SpecialistSpec] = {
             "ledger.repo_activity",
         ),
     ),
+    "patch-review": SpecialistSpec(
+        role="patch-review",
+        constitution=(
+            "Read-only reviewer of patch proposal artifacts. "
+            "Never submits, never approves, never mutates. "
+            "Produces a structured markdown report covering the proposal, "
+            "target repo, risk notes, and a recommendation. "
+            "If the referenced proposal cannot be found, says so plainly."
+        ),
+        allowed_surfaces=(
+            "read_patch_proposal",
+            "list_patch_proposals",
+            "inspect_repo_map",
+            "inspect_repo_relevance",
+            "get_repo_state",
+        ),
+    ),
     "ixion-diagnostician": SpecialistSpec(
         role="ixion-diagnostician",
         constitution=(
@@ -85,24 +103,50 @@ def get_specialist_spec(role: str) -> SpecialistSpec:
         raise ValueError(f"Unsupported specialist role: {role}") from exc
 
 
+def enforce_allowed_surfaces(role: str, tool_name: str) -> bool:
+    """Return True only if tool_name is in the role's allowed_surfaces.
+
+    Strict: unknown roles return False. This is the gate the specialist
+    subagent runtimes can call before dispatching a tool. It is not wired
+    into the resident operator's own dispatcher.
+    """
+    spec = SPECIALIST_SPECS.get(role)
+    if spec is None:
+        return False
+    return tool_name in spec.allowed_surfaces
+
+
 def run_specialist(
-    settings: Settings,
-    *,
     role: str,
-    goal: str,
-    context: str = "",
+    goal: str = "",
+    context: Any = "",
     repo_path: str = "",
+    *,
+    settings: Settings | None = None,
 ) -> str:
-    """Execute a bounded specialist and return its markdown result."""
+    """Execute a bounded specialist and return its markdown result.
+
+    context may be a plain string (legacy specialists) or a dict
+    (patch-review and any future structured-context specialists).
+    settings is required for specialists that touch the ledger or
+    repo registry; patch-review is pure file IO and does not need it.
+    """
     spec = get_specialist_spec(role)
+    if role == "patch-review":
+        return _run_patch_review(spec=spec, goal=goal, context=context)
+    if settings is None:
+        raise ValueError(
+            f"Specialist '{role}' requires settings to be provided."
+        )
+    context_str = context if isinstance(context, str) else _dict_context_to_str(context)
     if role == "rate-limit-triage":
-        return _run_rate_limit_triage(settings, spec=spec, goal=goal, context=context)
+        return _run_rate_limit_triage(settings, spec=spec, goal=goal, context=context_str)
     if role == "repo-diagnostician":
         return _run_repo_diagnostician(
             settings,
             spec=spec,
             goal=goal,
-            context=context,
+            context=context_str,
             repo_path=repo_path,
         )
     if role == "ixion-diagnostician":
@@ -110,9 +154,113 @@ def run_specialist(
             settings,
             spec=spec,
             goal=goal,
-            context=context,
+            context=context_str,
         )
     raise ValueError(f"Unsupported specialist role: {role}")
+
+
+def _dict_context_to_str(context: Any) -> str:
+    if not context:
+        return ""
+    if isinstance(context, dict):
+        return "\n".join(f"{k}: {v}" for k, v in context.items())
+    return str(context)
+
+
+def _run_patch_review(
+    *,
+    spec: SpecialistSpec,
+    goal: str,
+    context: Any,
+) -> str:
+    """Read-only reviewer of patch proposal artifacts.
+
+    Resolves the proposal by explicit `proposal_path` if present in
+    context, otherwise by `proposal_id` walked across session dirs
+    under the configured repo root. If nothing is found, returns a
+    clean "not found" report — never raises.
+    """
+    ctx_dict: dict[str, Any] = context if isinstance(context, dict) else {}
+    proposal_path_raw = str(ctx_dict.get("proposal_path", "")).strip()
+    proposal_id = str(ctx_dict.get("proposal_id", "")).strip()
+    repo_root_raw = str(ctx_dict.get("repo_root", "")).strip()
+
+    proposal_md: str = ""
+    resolved_path: str = ""
+
+    if proposal_path_raw:
+        p = Path(proposal_path_raw).expanduser()
+        if p.is_file():
+            try:
+                proposal_md = p.read_text(encoding="utf-8", errors="replace")
+                resolved_path = str(p)
+            except OSError:
+                pass
+
+    if not proposal_md and proposal_id and repo_root_raw:
+        try:
+            sessions_dir = Path(repo_root_raw) / "state" / "operator_sessions"
+            if sessions_dir.exists():
+                for sess in sessions_dir.iterdir():
+                    candidate = sess / "patches" / proposal_id / "proposal.md"
+                    if candidate.is_file():
+                        try:
+                            proposal_md = candidate.read_text(
+                                encoding="utf-8", errors="replace"
+                            )
+                            resolved_path = str(candidate)
+                            break
+                        except OSError:
+                            continue
+        except OSError:
+            pass
+
+    if not proposal_md:
+        label = proposal_path_raw or proposal_id or "(unspecified)"
+        lines = [
+            "# Patch Review",
+            "",
+            f"Goal: {goal}",
+            f"Constitution: {spec.constitution}",
+            "",
+            "## Patch review: not found",
+            "",
+            f"No patch proposal could be resolved for: {label}",
+            "",
+            "## Recommendation",
+            "- Provide a valid `proposal_path` or both `proposal_id` and `repo_root` in context.",
+        ]
+        return "\n".join(lines).strip() + "\n"
+
+    # Best-effort parse of a handful of fields from the markdown body.
+    target_repo = ""
+    for line in proposal_md.splitlines():
+        if line.startswith("- repo:"):
+            target_repo = line.split(":", 1)[1].strip()
+            break
+
+    lines = [
+        "# Patch Review",
+        "",
+        f"Goal: {goal}",
+        f"Constitution: {spec.constitution}",
+        "",
+        "## Proposal",
+        f"- source: {resolved_path}",
+        "",
+        proposal_md.strip(),
+        "",
+        "## Target repo",
+        f"- repo: {target_repo or '(unknown)'}",
+        "",
+        "## Risk notes",
+        "- This reviewer is read-only. It cannot approve, submit, or mutate the proposal.",
+        "- Confirm risk_notes and provenance on the proposal itself before any human approval.",
+        "",
+        "## Recommendation",
+        "- Read the proposal above, then route any approval through the hermes-node approvals flow.",
+    ]
+    return "\n".join(lines).strip() + "\n"
 
 
 def _run_ixion_diagnostician(

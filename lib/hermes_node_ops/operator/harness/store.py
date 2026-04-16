@@ -198,11 +198,11 @@ def spawn_subagent(
 
     try:
         result = run_specialist(
-            settings,
-            role=role,
-            goal=goal,
-            context=context,
-            repo_path=repo_path,
+            role,
+            goal,
+            context,
+            repo_path,
+            settings=settings,
         )
         (subdir / "result.md").write_text(result, encoding="utf-8")
         _append_subagent_thread(subdir, role="assistant", content=result)

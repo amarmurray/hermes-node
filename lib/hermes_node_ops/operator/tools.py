@@ -939,6 +939,42 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_project_memory",
+            "description": (
+                "Detect the current project (git repo root, branch) and load layered "
+                "AGENTS.md / .operator memory files. Returns cwd, repo_root, branch, "
+                "and rendered memory text."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember_project_fact",
+            "description": (
+                "Append a durable timestamped fact to AGENTS.md at the current repo "
+                "root. Fails cleanly if not inside a git repository."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Fact text to remember.",
+                    },
+                },
+                "required": ["text"],
+            },
+        },
+    },
 ]
 
 
@@ -1412,6 +1448,40 @@ class ToolExecutor:
                 limit=limit,
                 mode=mode,
             )
+
+    def _tool_load_project_memory(self) -> dict[str, Any]:
+        from .project_memory import detect_project, render_memory_layers
+        ctx = detect_project()
+        return {
+            "cwd": ctx.cwd,
+            "repo_root": ctx.repo_root,
+            "branch": ctx.branch,
+            "memory": render_memory_layers(ctx.memory_layers),
+        }
+
+    def _tool_remember_project_fact(self, text: str) -> dict[str, Any]:
+        from datetime import datetime, timezone
+        from .project_memory import detect_project
+        ctx = detect_project()
+        if not ctx.repo_root:
+            return {"written": False, "error": "not in a git repository"}
+        agents_path = Path(ctx.repo_root) / "AGENTS.md"
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            existing = (
+                agents_path.read_text(encoding="utf-8")
+                if agents_path.exists()
+                else ""
+            )
+            if existing and not existing.endswith("\n"):
+                existing += "\n"
+            agents_path.write_text(
+                existing + f"- [{stamp}] {text}\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            return {"written": False, "error": str(exc)}
+        return {"written": True, "path": str(agents_path)}
 
     def _tool_save_note(self, note: str) -> dict[str, Any]:
         if not self.session_id:

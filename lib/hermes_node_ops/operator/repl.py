@@ -20,8 +20,11 @@ from .harness import (
     read_plan,
     read_todo_markdown,
 )
+from .harness.specialists import SPECIALIST_ROLES
+from .project_memory import detect_project, render_memory_layers
 from .runtime import run_operator_turn
-from .session import create_session
+from .session import append_note, create_session, read_notes
+from .temporal_seam import SpecialistInvocation, invoke_specialist_once
 from .tools import ToolExecutor, get_tool_definitions
 
 
@@ -167,7 +170,17 @@ def _handle_slash_command(
 
     if cmd == "/sessions":
         from .session import list_sessions
-        sessions = list_sessions(repo_root, limit=10)
+        repo_filter = ""
+        tokens = arg.split()
+        if "--repo" in tokens:
+            idx = tokens.index("--repo")
+            if idx + 1 < len(tokens):
+                repo_filter = tokens[idx + 1]
+        sessions = list_sessions(
+            repo_root,
+            limit=10,
+            project_repo_name=repo_filter,
+        )
         if not sessions:
             print("no sessions")
         for s in sessions:
@@ -212,13 +225,89 @@ def _handle_slash_command(
         return ""
 
     if cmd == "/note" and arg:
-        from .session import append_note
         append_note(repo_root, session_id, arg)
         print("noted.")
         return ""
 
+    if cmd == "/whereami":
+        ctx = detect_project()
+        print(f"  cwd:         {ctx.cwd}")
+        print(f"  repo_root:   {ctx.repo_root or '(not in git repo)'}")
+        print(f"  branch:      {ctx.branch or '(n/a)'}")
+        print(f"  repo_name:   {ctx.repo_name or '(n/a)'}")
+        print(f"  memory:      {len(ctx.memory_layers)} layer(s)")
+        return ""
+
+    if cmd == "/project":
+        ctx = detect_project()
+        print(f"  cwd:         {ctx.cwd}")
+        print(f"  repo_root:   {ctx.repo_root or '(not in git repo)'}")
+        print(f"  branch:      {ctx.branch or '(n/a)'}")
+        print(f"  repo_name:   {ctx.repo_name or '(n/a)'}")
+        print(f"  memory:      {len(ctx.memory_layers)} layer(s)")
+        rendered = render_memory_layers(ctx.memory_layers)
+        if rendered:
+            lines = rendered.splitlines()
+            for line in lines[:40]:
+                print(line)
+            if len(lines) > 40:
+                print("… (truncated)")
+        return ""
+
+    if cmd == "/remember" and arg:
+        ctx = detect_project()
+        from datetime import datetime, timezone
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if ctx.repo_root:
+            agents_path = Path(ctx.repo_root) / "AGENTS.md"
+            try:
+                existing = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
+                if existing and not existing.endswith("\n"):
+                    existing += "\n"
+                agents_path.write_text(
+                    existing + f"- [{stamp}] {arg}\n",
+                    encoding="utf-8",
+                )
+                print(f"remembered in {agents_path}")
+            except OSError as exc:
+                print(f"failed to write AGENTS.md: {exc}")
+        else:
+            append_note(repo_root, session_id, arg)
+            print("not in a git repo — remembered in session notes")
+        return ""
+
+    if cmd == "/specialist" and arg:
+        parts2 = arg.split(maxsplit=1)
+        role = parts2[0]
+        goal = parts2[1] if len(parts2) > 1 else ""
+        if role not in SPECIALIST_ROLES:
+            print(f"unknown role: {role}")
+            print(f"available: {', '.join(SPECIALIST_ROLES)}")
+            return ""
+        ctx = detect_project()
+        outcome = invoke_specialist_once(
+            settings,
+            SpecialistInvocation(
+                role=role,
+                goal=goal,
+                parent_session_id=session_id,
+                repo_path=ctx.repo_root or "",
+            ),
+        )
+        if outcome.error:
+            print(f"specialist error: {outcome.error}")
+        if outcome.report:
+            print(outcome.report)
+        if outcome.subagent_id:
+            print(f"[subagent: {outcome.subagent_id}]")
+        return ""
+
     if cmd == "/help":
-        print("commands: /quit /status /sessions /notes /plan /todo /subagents /note <text> /help")
+        print(
+            "commands: /quit /status /sessions [--repo <name>] /notes /plan /todo "
+            "/subagents /note <text> /whereami /project /remember <text> "
+            "/specialist <role> <goal...> /help"
+        )
         return ""
 
     print(f"unknown command: {cmd}")

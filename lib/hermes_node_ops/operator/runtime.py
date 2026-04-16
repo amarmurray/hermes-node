@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from .backend import ChatBackend, ToolCall
 from .constitution import build_system_prompt
+from .project_memory import detect_project, render_memory_layers
 from .response_synth import (
     SynthesisMode,
     SynthesisResult,
@@ -54,6 +55,8 @@ class TurnEffects:
     plan_touched: bool = False
     todo_touched: bool = False
     scratch_touched: bool = False
+    project_repo_name: str = ""
+    project_branch: str = ""
 
     @property
     def approval_needed(self) -> bool:
@@ -78,6 +81,8 @@ class TurnEffects:
             "plan_touched": self.plan_touched,
             "todo_touched": self.todo_touched,
             "scratch_touched": self.scratch_touched,
+            "project_repo_name": self.project_repo_name,
+            "project_branch": self.project_branch,
             "approval_needed": self.approval_needed,
             "task_created": self.task_created,
             "plan_or_task_created": self.plan_or_task_created,
@@ -145,7 +150,16 @@ def run_operator_turn(
     append_message(repo_root, session_id, role="user", content=user_input)
 
     notes = read_notes(repo_root, session_id)
-    system_prompt = build_system_prompt(session_notes=notes)
+    try:
+        project_ctx = detect_project()
+        project_memory_text = render_memory_layers(project_ctx.memory_layers)
+    except Exception:  # noqa: BLE001
+        project_ctx = None
+        project_memory_text = ""
+    system_prompt = build_system_prompt(
+        session_notes=notes,
+        project_memory=project_memory_text,
+    )
     messages = build_messages_for_backend(
         repo_root,
         session_id,
@@ -156,6 +170,9 @@ def run_operator_turn(
     tool_refs: list[ToolResultRef] = []
     tool_trace: list[ToolExecutionRecord] = []
     effects = TurnEffects()
+    if project_ctx is not None:
+        effects.project_repo_name = project_ctx.repo_name
+        effects.project_branch = project_ctx.branch
     finish_reason = ""
 
     rounds = 0

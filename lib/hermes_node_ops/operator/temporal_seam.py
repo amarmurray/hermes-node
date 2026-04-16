@@ -15,8 +15,13 @@ from typing import Any
 from ..config import Settings
 from .backend import ChatBackend
 from .backend_policy import OperatorIntent, resolve_backend
+from .harness.specialists import (
+    SPECIALIST_ROLES,
+    get_specialist_spec,
+    run_specialist,
+)
 from .runtime import OperatorTurnResult, run_operator_turn
-from .session import create_session
+from .session import create_session, session_dir
 from .tools import ToolExecutor
 
 
@@ -180,6 +185,127 @@ def invoke_operator_with_policy(
         tool_limit_reached=outcome.tool_limit_reached,
         synthesis_notes=outcome.synthesis_notes,
     )
+
+
+@dataclass(frozen=True)
+class SpecialistInvocation:
+    """Input envelope for one bounded specialist subagent invocation."""
+
+    role: str
+    goal: str
+    context: dict[str, Any] = field(default_factory=dict)
+    parent_session_id: str = ""
+    repo_path: str = ""
+
+
+@dataclass(frozen=True)
+class SpecialistOutcome:
+    """Structured result from a specialist invocation."""
+
+    role: str
+    goal: str
+    report: str
+    subagent_id: str = ""
+    receipt_path: str = ""
+    error: str = ""
+
+
+def invoke_specialist_once(
+    settings: Settings,
+    invocation: SpecialistInvocation,
+) -> SpecialistOutcome:
+    """Run one bounded specialist synchronously and return its outcome.
+
+    Pure-python: no backend model call. If `parent_session_id` is
+    non-empty, also writes a durable child artifact under the parent
+    session so the report survives restarts and shows up in /subagents.
+    """
+    if invocation.role not in SPECIALIST_ROLES:
+        return SpecialistOutcome(
+            role=invocation.role,
+            goal=invocation.goal,
+            report="",
+            error=f"unknown role: {invocation.role}",
+        )
+
+    # Fetch spec eagerly so a malformed registry is surfaced, not swallowed.
+    _ = get_specialist_spec(invocation.role)
+
+    report = ""
+    error = ""
+    try:
+        report = run_specialist(
+            invocation.role,
+            invocation.goal,
+            invocation.context,
+            invocation.repo_path,
+            settings=settings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        error = str(exc)[:240]
+
+    subagent_id = ""
+    receipt_path = ""
+    if invocation.parent_session_id and report:
+        subagent_id, receipt_path = _persist_specialist_artifact(
+            Path(settings.repo_root),
+            invocation.parent_session_id,
+            invocation.role,
+            invocation.goal,
+            report,
+        )
+
+    return SpecialistOutcome(
+        role=invocation.role,
+        goal=invocation.goal,
+        report=report,
+        subagent_id=subagent_id,
+        receipt_path=receipt_path,
+        error=error,
+    )
+
+
+def _persist_specialist_artifact(
+    repo_root: Path,
+    parent_session_id: str,
+    role: str,
+    goal: str,
+    report: str,
+) -> tuple[str, str]:
+    """Write a minimal durable child artifact under the parent session.
+
+    This does not use harness.store.spawn_subagent because that helper
+    also runs the specialist; invoke_specialist_once has already run it.
+    Keeps the on-disk shape compatible with /subagents enumeration.
+    """
+    try:
+        import uuid
+
+        from ..jsonl import utcnow
+        sub_id = f"subagent_{uuid.uuid4().hex[:12]}"
+        subdir = session_dir(repo_root, parent_session_id) / "subagents" / sub_id
+        subdir.mkdir(parents=True, exist_ok=True)
+        result_path = subdir / "result.md"
+        result_path.write_text(report, encoding="utf-8")
+        ctx = {
+            "subagent_id": sub_id,
+            "parent_session_id": parent_session_id,
+            "role": role,
+            "goal": goal,
+            "status": "completed",
+            "created_at": utcnow(),
+            "completed_at": utcnow(),
+            "source": "invoke_specialist_once",
+        }
+        import json as _json
+
+        (subdir / "context.json").write_text(
+            _json.dumps(ctx, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return sub_id, str(result_path)
+    except OSError:
+        return "", ""
 
 
 def _outcome_from_turn(

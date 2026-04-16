@@ -63,11 +63,22 @@ Style:
 """
 
 
-def build_system_prompt(*, session_notes: str = "") -> str:
-    """Build the full system prompt, optionally including session notes."""
-    parts = [OPERATOR_SYSTEM_PROMPT]
+def build_system_prompt(
+    *,
+    session_notes: str = "",
+    project_memory: str = "",
+) -> str:
+    """Build the full system prompt, layering project memory and notes.
+
+    Layering order: base constitution → project memory (if any) →
+    session notes (if any). Sections are separated with horizontal rules
+    so the LLM can clearly see the provenance of each block.
+    """
+    parts: list[str] = [OPERATOR_SYSTEM_PROMPT.rstrip()]
+    if project_memory.strip():
+        parts.append(project_memory.strip())
     if session_notes.strip():
         parts.append(
-            f"\n## Notes from previous sessions\n\n{session_notes.strip()}\n"
+            f"## Notes from previous sessions\n\n{session_notes.strip()}"
         )
-    return "\n".join(parts)
+    return "\n\n---\n\n".join(parts)

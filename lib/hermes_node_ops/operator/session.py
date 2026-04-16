@@ -27,11 +27,21 @@ def session_dir(repo_root: Path, session_id: str) -> Path:
     return sessions_root(repo_root) / session_id
 
 
-def create_session(repo_root: Path, *, model: str = "", resume: str = "") -> str:
+def create_session(
+    repo_root: Path,
+    *,
+    model: str = "",
+    resume: str = "",
+    project: dict | None = None,
+) -> str:
     """Create a new session or resume an existing one.
 
     If resume is a valid session ID that exists, returns it.
     Otherwise creates a new session directory.
+
+    When project is provided on a new session, its dict is stored in
+    context.json under the "project" key so sessions can later be filtered
+    by repo_name or re-associated with a specific checkout.
     """
     if resume:
         existing = session_dir(repo_root, resume)
@@ -43,12 +53,20 @@ def create_session(repo_root: Path, *, model: str = "", resume: str = "") -> str
     sdir = session_dir(repo_root, sid)
     sdir.mkdir(parents=True, exist_ok=True)
 
-    context = {
+    context: dict[str, Any] = {
         "session_id": sid,
         "created_at": utcnow(),
         "last_active": utcnow(),
         "model": model,
     }
+    if project:
+        context["project"] = {
+            "repo_root": project.get("repo_root", ""),
+            "branch": project.get("branch", ""),
+            "worktree": project.get("worktree", ""),
+            "repo_name": project.get("repo_name", ""),
+            "cwd": project.get("cwd", ""),
+        }
     (sdir / "context.json").write_text(
         json.dumps(context, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -198,8 +216,18 @@ def read_context(repo_root: Path, session_id: str) -> dict[str, Any]:
         return {}
 
 
-def list_sessions(repo_root: Path, *, limit: int = 20) -> list[dict[str, Any]]:
-    """List recent sessions with their context metadata."""
+def list_sessions(
+    repo_root: Path,
+    *,
+    limit: int = 20,
+    project_repo_name: str = "",
+) -> list[dict[str, Any]]:
+    """List recent sessions with their context metadata.
+
+    When project_repo_name is non-empty, only sessions whose stored
+    project dict has a matching repo_name are returned. Sessions without
+    a stored project are filtered out when a filter is set.
+    """
     root = sessions_root(repo_root)
     if not root.exists():
         return []
@@ -210,6 +238,10 @@ def list_sessions(repo_root: Path, *, limit: int = 20) -> list[dict[str, Any]]:
             continue
         ctx = read_context(repo_root, sdir.name)
         ctx["session_id"] = sdir.name
+        if project_repo_name:
+            project = ctx.get("project") or {}
+            if project.get("repo_name") != project_repo_name:
+                continue
         thread_path = sdir / "thread.jsonl"
         ctx["message_count"] = (
             sum(1 for line in thread_path.read_text(encoding="utf-8").splitlines() if line.strip())
@@ -221,6 +253,15 @@ def list_sessions(repo_root: Path, *, limit: int = 20) -> list[dict[str, Any]]:
             break
 
     return sessions
+
+
+def read_session_project(repo_root: Path, session_id: str) -> dict[str, Any]:
+    """Return the stored project dict for a session, or {} if absent."""
+    ctx = read_context(repo_root, session_id)
+    project = ctx.get("project")
+    if isinstance(project, dict):
+        return project
+    return {}
 
 
 def _update_context(sdir: Path, **updates: Any) -> None:
