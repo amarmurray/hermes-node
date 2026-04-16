@@ -133,6 +133,59 @@ class ResponseSynthTests(unittest.TestCase):
         self.assertNotIn("Result:", out.text)
         self.assertIn("ixion is clean", out.text)
 
+    # Phase 5.1 — narration / tool-call leakage stripping
+
+    def test_strips_i_would_call_preamble(self) -> None:
+        text = "I would call get_queue_status to check.\n\nThe queue has 3 tasks."
+        out = synthesize_assistant_text(text)
+        self.assertNotIn("I would call", out.text)
+        self.assertIn("queue has 3", out.text)
+
+    def test_strips_first_i_will_preamble(self) -> None:
+        text = "First, I'll check the ledger.\n\nNo active cooldowns."
+        out = synthesize_assistant_text(text)
+        self.assertNotIn("First, I'll", out.text)
+        self.assertIn("No active cooldowns", out.text)
+
+    def test_strips_im_going_to_preamble(self) -> None:
+        text = "I'm going to check the repo state.\n\nIxion is on main, clean."
+        out = synthesize_assistant_text(text)
+        self.assertNotIn("I'm going to", out.text)
+        self.assertIn("Ixion is on main", out.text)
+
+    def test_strips_step_number_preamble(self) -> None:
+        text = "Step 1: inspect the queue status\n\nThe queue is empty."
+        out = synthesize_assistant_text(text)
+        self.assertNotIn("Step 1", out.text)
+        self.assertIn("queue is empty", out.text)
+
+    def test_strips_tool_call_leakage_mid_text(self) -> None:
+        text = "The queue is quiet.\nfunction_call: get_queue_status(limit=5)\nAll clear."
+        out = synthesize_assistant_text(text)
+        self.assertNotIn("function_call", out.text)
+        self.assertNotIn("get_queue_status", out.text)
+        self.assertIn("queue is quiet", out.text)
+        self.assertIn("All clear", out.text)
+
+    def test_strips_mid_text_narration_line(self) -> None:
+        text = "Queue is empty.\nI'll now call list_registered_repos to check.\nTwo repos registered."
+        out = synthesize_assistant_text(text)
+        self.assertNotIn("I'll now call", out.text)
+        self.assertIn("Queue is empty", out.text)
+        self.assertIn("Two repos registered", out.text)
+
+    def test_strips_next_i_will_narration(self) -> None:
+        text = "Next, I will check the workspace.\n\nThe workspace has 3 files."
+        out = synthesize_assistant_text(text)
+        self.assertNotIn("Next, I will", out.text)
+        self.assertIn("workspace has 3", out.text)
+
+    def test_preserves_genuine_content_with_i_will(self) -> None:
+        # "I will" in non-narration context should survive
+        text = "I will need your approval before submitting the patch."
+        out = synthesize_assistant_text(text)
+        self.assertIn("approval", out.text)
+
 
 if __name__ == "__main__":
     unittest.main()

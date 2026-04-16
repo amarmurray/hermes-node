@@ -74,11 +74,14 @@ _SLASH_THINK = re.compile(r"(?<!\S)/(think|thinking|scratch|reflection)\b", re.I
 # Preambles that small models love and humans hate.
 _PREAMBLE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^(sure|certainly|of course|absolutely|alright|okay|ok)[,!.\s].*?\n", re.IGNORECASE),
-    re.compile(r"^(let me|i (will|am going to|'ll)) (now |first |go ahead and )?(use|call|invoke|run|check|inspect)[^\n]*\n", re.IGNORECASE),
+    re.compile(r"^(let me|i (will|am going to|'ll)|i'm going to|i need to|i can) (now |first |go ahead and )?(use|call|invoke|run|check|inspect|look|fetch|query|retrieve|get)[^\n]*\n", re.IGNORECASE),
+    re.compile(r"^(first|next|then),? (i('ll| will| need to| am going to)|let me)[^\n]*\n", re.IGNORECASE),
     re.compile(r"^here'?s? (the|a|your|what)[^\n]{0,80}:\s*\n", re.IGNORECASE),
     re.compile(r"^as an? (ai|assistant|language model|llm)[^\n]*\n", re.IGNORECASE),
     re.compile(r"^based on (the|my) (above|previous|tool|results?)[^\n]*\n", re.IGNORECASE),
     re.compile(r"^(thinking|reasoning|analysis):\s*\n", re.IGNORECASE),
+    re.compile(r"^(i would|i'?d) (call|use|invoke|check|run|look|need to)[^\n]*\n", re.IGNORECASE),
+    re.compile(r"^(step \d+|the (first|next) step)[^\n]*\n", re.IGNORECASE),
 )
 
 # Canned status-dump openers we collapse rather than delete (we keep one).
@@ -90,6 +93,22 @@ _LOOKS_LIKE_BARE_JSON = re.compile(r"^\s*[\{\[][\s\S]*[\}\]]\s*$")
 # "Summary:" / "Result:" labels that small models sprinkle when they aren't
 # producing actual structured output.
 _LABEL_NOISE = re.compile(r"(?m)^(summary|result|response|answer|output)\s*:\s*", re.IGNORECASE)
+
+# Tool-call syntax leakage that should never reach the user.
+_TOOL_CALL_LEAK = re.compile(
+    r"(?m)^(function[_ ]call|tool[_ ]call|calling|tool[_ ]use)\s*:?\s*[a-z_]+\s*\(.*?\)\s*$",
+    re.IGNORECASE,
+)
+
+# Narration lines like "I will now call X" or "Next I'll check Y" that appear
+# mid-response (not just as a first-paragraph preamble).
+_NARRATION_LINE = re.compile(
+    r"(?m)^(i('ll| will| am going to| would| need to)|let me|next[,:]? i('ll| will)|"
+    r"first[,:]? (i('ll| will)|let me)|now (i('ll| will)|let me))"
+    r"( now| first| also| then| next| go ahead and)?"
+    r" (call|use|invoke|run|check|inspect|look|fetch|query|get|retrieve)[^\n]*$",
+    re.IGNORECASE,
+)
 
 # Repeated whitespace — collapsed last so we don't break code fences.
 _MULTI_BLANK = re.compile(r"\n{3,}")
@@ -219,6 +238,16 @@ def synthesize_assistant_text(
     if n_label:
         text = new_text
         notes.append("stripped label noise")
+
+    # 5b. Strip tool-call syntax leakage ("Function call: get_queue_status()").
+    if _TOOL_CALL_LEAK.search(text):
+        text = _TOOL_CALL_LEAK.sub("", text)
+        notes.append("stripped tool-call leakage")
+
+    # 5c. Strip mid-text narration lines ("I'll now call...", "Next I will check...").
+    if _NARRATION_LINE.search(text):
+        text = _NARRATION_LINE.sub("", text)
+        notes.append("stripped narration lines")
 
     # 6. Collapse 3+ blank lines.
     text = _MULTI_BLANK.sub("\n\n", text).strip()

@@ -30,6 +30,10 @@ from .tools import ToolExecutor, get_tool_definitions
 
 MAX_TOOL_ROUNDS = 10  # safety limit on consecutive tool call rounds
 
+# Module-level verbose flag toggled by /verbose. Default is quiet —
+# the user sees only the final synthesized answer.
+_verbose_mode = False
+
 
 def run_repl(
     settings: Settings,
@@ -38,6 +42,9 @@ def run_repl(
     session_id: str = "",
 ) -> None:
     """Run the interactive operator REPL."""
+    global _verbose_mode  # noqa: PLW0603
+    _verbose_mode = False
+
     repo_root = settings.repo_root
     project_ctx = detect_project()
     project = (
@@ -61,7 +68,7 @@ def run_repl(
 
     print(f"hermes-node operator ({backend.model_name})")
     print(f"session: {sid}")
-    print("type /quit to exit, /status for queue, /plan and /todo for harness state")
+    print("type /quit to exit, /verbose to toggle debug output")
     print()
 
     # Set up readline history
@@ -92,7 +99,7 @@ def run_repl(
                     break
                 continue
 
-            # Record user message
+            # Record user message — hooks only fire in verbose mode
             result = run_operator_turn(
                 settings=settings,
                 backend=backend,
@@ -102,9 +109,9 @@ def run_repl(
                 user_input=user_input,
                 tool_defs=tool_defs,
                 max_tool_rounds=MAX_TOOL_ROUNDS,
-                on_intermediate_assistant=_print_intermediate_assistant,
-                on_tool_call=_print_tool_call,
-                on_tool_result=_print_tool_result,
+                on_intermediate_assistant=_print_intermediate_assistant if _verbose_mode else None,
+                on_tool_call=_print_tool_call if _verbose_mode else None,
+                on_tool_result=_print_tool_result if _verbose_mode else None,
             )
             if result.error:
                 print(f"\x1b[31m{result.text}\x1b[0m")
@@ -319,11 +326,18 @@ def _handle_slash_command(
             print(f"[subagent: {outcome.subagent_id}]")
         return ""
 
+    if cmd == "/verbose":
+        global _verbose_mode  # noqa: PLW0603
+        _verbose_mode = not _verbose_mode
+        state = "on" if _verbose_mode else "off"
+        print(f"verbose mode: {state}")
+        return ""
+
     if cmd == "/help":
         print(
             "commands: /quit /status /sessions [--repo <name>] /notes /plan /todo "
             "/subagents /note <text> /whereami /project /remember <text> "
-            "/specialist <role> <goal...> /help"
+            "/specialist <role> <goal...> /verbose /help"
         )
         return ""
 
