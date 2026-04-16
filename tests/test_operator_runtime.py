@@ -194,6 +194,71 @@ class OperatorRuntimeTests(unittest.TestCase):
         self.assertEqual(result.effects.task_ids_needing_approval, ["task_123"])
         self.assertTrue(result.effects.approval_needed)
 
+    def test_action_completion_guard_nudges_then_completes(self) -> None:
+        """Guard should inject a nudge when model narrates instead of acting,
+        then the second call actually performs the work."""
+        settings = _make_settings()
+        sid = create_session(settings.repo_root, model="fake-runtime")
+        backend = FakeBackend(
+            canned=[
+                # Round 1: pure narration — no tool calls, no real content
+                AssistantMessage(content="I would call get_queue_status to check this."),
+                # Round 2 (after nudge): model actually calls the tool
+                AssistantMessage(
+                    content="",
+                    tool_calls=[ToolCall(id="tc1", name="get_queue_status", arguments={})],
+                ),
+                # Round 3: model synthesizes
+                AssistantMessage(content="The queue is currently empty."),
+            ]
+        )
+        executor = FakeExecutor(
+            results={"get_queue_status": json.dumps({"counts": {"queued": 0}})}
+        )
+
+        result = run_operator_turn(
+            settings=settings,
+            backend=backend,
+            executor=executor,  # type: ignore[arg-type]
+            repo_root=settings.repo_root,
+            session_id=sid,
+            user_input="show me the queue",
+        )
+
+        self.assertFalse(result.error)
+        self.assertIn("The queue is currently empty.", result.text)
+        self.assertIn("get_queue_status", result.effects.tool_names)
+        # Must have taken more than 1 round (guard added extra round)
+        self.assertGreater(result.tool_rounds, 1)
+
+    def test_action_completion_guard_does_not_fire_when_real_content_follows(self) -> None:
+        """Guard must NOT fire when narration opener is followed by a real answer."""
+        settings = _make_settings()
+        sid = create_session(settings.repo_root, model="fake-runtime")
+        backend = FakeBackend(
+            canned=[
+                # Narration opener + real answer — guard should stay silent
+                AssistantMessage(
+                    content="Let me check that.\n\nThe queue has no active tasks.",
+                ),
+            ]
+        )
+        executor = ToolExecutor(settings, settings.repo_root, session_id=sid)
+
+        result = run_operator_turn(
+            settings=settings,
+            backend=backend,
+            executor=executor,
+            repo_root=settings.repo_root,
+            session_id=sid,
+            user_input="how is the queue?",
+        )
+
+        # Guard should not have fired — no extra round, no nudge
+        self.assertEqual(result.tool_rounds, 1)
+        self.assertIn("active tasks", result.text)
+        self.assertFalse(result.error)
+
 
 if __name__ == "__main__":
     unittest.main()

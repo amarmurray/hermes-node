@@ -8,6 +8,7 @@ aligned across every ingress.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -23,6 +24,43 @@ from .response_synth import (
 )
 from .session import append_message, build_messages_for_backend, read_notes
 from .tools import ToolExecutor, get_tool_definitions
+
+
+# Patterns indicating the model described an action instead of taking it.
+# Used by the action-completion guard.
+_NARRATION_ACTION_MARKERS: re.Pattern[str] = re.compile(
+    r"\b(i\s+(would|will|can|should|need\s+to|am\s+going\s+to|'ll)"
+    r"|let\s+me|i'm\s+going\s+to|to\s+(answer|check|see|inspect)\s+this[,\s]+i)"
+    r"\s+(call|check|use|invoke|run|look|query|inspect|fetch|retrieve|get)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_narration_without_action(text: str) -> bool:
+    """True if the model described what it would do rather than doing it.
+
+    Conservative — only fires when:
+    1. A clear action-narration marker is present, AND
+    2. There is no substantial content AFTER the narration (i.e. the whole
+       response is just narration, not a narration opener followed by an answer).
+
+    False positives are worse than false negatives here.
+    """
+    if not text or not text.strip():
+        return False
+    if not _NARRATION_ACTION_MARKERS.search(text):
+        return False
+    # Check if there's real content after the first paragraph.
+    # "Sure, let me check.\n\nThe queue is empty." has real content → don't fire.
+    # "I would call get_queue_status to check." has nothing → fire.
+    parts = text.split("\n\n", 1)
+    if len(parts) > 1:
+        rest = parts[1].strip()
+        # If the second part has 20+ chars of non-whitespace content, it's
+        # a real answer following a narration opener — don't fire the guard.
+        if len(rest) >= 10:
+            return False
+    return True
 
 
 def _estimate_context_pressure(
@@ -313,8 +351,34 @@ def run_operator_turn(
                     on_tool_result(tc.name, result)
             continue
 
+        # Action-completion guard: if the model described what it would do
+        # instead of calling a tool, inject a single nudge and retry once.
+        # Only fires on the first response (no prior tools called) and only
+        # when tools were available. Avoids infinite loops by capping at one
+        # retry (rounds == 1 guard).
+        raw_content = response.content or ""
+        if (
+            tools
+            and not tool_refs  # no tools called yet this turn
+            and rounds == 1    # only on first response
+            and _looks_like_narration_without_action(raw_content)
+        ):
+            # Record the narration as an intermediate assistant message
+            # so the model has context, then nudge it to act.
+            messages.append({"role": "assistant", "content": raw_content})
+            messages.append({
+                "role": "user",
+                "content": (
+                    "Please do it — call the relevant tool now and give me "
+                    "the result directly."
+                ),
+            })
+            if on_intermediate_assistant and raw_content:
+                on_intermediate_assistant(raw_content)
+            continue  # one more round with the nudge
+
         synthesis = synthesize_assistant_text(
-            response.content or "",
+            raw_content,
             mode=response_mode,
             tool_refs=tool_refs,
         )
@@ -322,7 +386,7 @@ def run_operator_turn(
         return OperatorTurnResult(
             session_id=session_id,
             text=synthesis.text,
-            raw_text=response.content or "",
+            raw_text=raw_content,
             mode=response_mode,
             synthesis_notes=synthesis.notes,
             finish_reason=finish_reason,
