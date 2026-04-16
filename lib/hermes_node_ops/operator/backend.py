@@ -68,7 +68,7 @@ class OpenAICompatibleBackend:
     base_url: str
     api_key: str = ""
     model: str = ""
-    timeout_seconds: int = 120
+    timeout_seconds: int = 180  # small local models with tools need headroom
 
     @property
     def model_name(self) -> str:
@@ -159,6 +159,15 @@ class OpenAICompatibleBackend:
                 )
             )
 
+        # Reasoning models (qwen3, etc.) put chain-of-thought in a
+        # ``reasoning`` field and leave ``content`` empty. When there
+        # are no tool calls (i.e. this is the final answer), fall back
+        # to ``reasoning`` so the operator sees the model's output.
+        # During tool-call turns we ignore reasoning — it's internal
+        # process, not the user-facing answer.
+        if not content and not tool_calls:
+            content = message.get("reasoning") or ""
+
         return AssistantMessage(
             content=content,
             tool_calls=tool_calls,
@@ -172,7 +181,7 @@ def create_backend(
     base_url: str = "",
     api_key: str = "",
     model: str = "",
-    timeout_seconds: int = 120,
+    timeout_seconds: int = 180,
 ) -> OpenAICompatibleBackend:
     """Create a backend from configuration.
 

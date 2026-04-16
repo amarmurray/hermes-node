@@ -59,8 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Resume an existing session by ID",
     )
     chat_parser.add_argument(
-        "--timeout", type=int, default=120,
-        help="Backend request timeout in seconds",
+        "--timeout", type=int, default=180,
+        help="Backend request timeout in seconds (default: 180, generous for local models with tools)",
     )
 
     sessions_parser = subparsers.add_parser(

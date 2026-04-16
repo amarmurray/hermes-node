@@ -90,7 +90,7 @@ class BackendDescriptor:
     base_url: str = ""
     api_key: str = ""
     model: str = ""
-    timeout_seconds: int = 120
+    timeout_seconds: int = 180
     notes: str = ""
 
     @property

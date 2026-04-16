@@ -128,7 +128,7 @@ class BackendPolicyTests(unittest.TestCase):
             base_url="https://remote.example/v1",
             api_key="",
             model="remote-model-large",
-            timeout_seconds=120,
+            timeout_seconds=180,
         )
 
     def test_resolve_backend_applies_explicit_overrides(self) -> None:
