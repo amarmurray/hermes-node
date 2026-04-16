@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,6 +17,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 from hermes_node_ops.config import Settings
 from hermes_node_ops.ledger import Ledger
 from hermes_node_ops.operator.backend import AssistantMessage, ToolCall
+from hermes_node_ops.operator.session import read_session_project
 from hermes_node_ops.operator.temporal_seam import (
     OperatorInvocation,
     invoke_operator_once,
@@ -56,6 +59,32 @@ def _make_settings() -> Settings:
     return settings
 
 
+def _init_git_repo(path: Path) -> None:
+    result = subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return
+    subprocess.run(
+        ["git", "init"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-b", "main"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 class TemporalSeamTests(unittest.TestCase):
     def test_invoke_operator_once_returns_structured_outcome(self) -> None:
         settings = _make_settings()
@@ -89,6 +118,33 @@ class TemporalSeamTests(unittest.TestCase):
         self.assertTrue(outcome.plan_touched)
         self.assertIn("Plan written", outcome.assistant_text)
         self.assertIn("write_plan", outcome.tool_names)
+
+    def test_invoke_operator_once_stamps_session_project(self) -> None:
+        settings = _make_settings()
+        backend = FakeBackend(canned=[AssistantMessage(content="ok")])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "ixion"
+            project_root.mkdir(parents=True, exist_ok=True)
+            _init_git_repo(project_root)
+
+            prev_cwd = os.getcwd()
+            try:
+                os.chdir(project_root)
+                outcome = invoke_operator_once(
+                    settings,
+                    backend,
+                    OperatorInvocation(goal="Say hi."),
+                )
+            finally:
+                os.chdir(prev_cwd)
+
+        project = read_session_project(settings.repo_root, outcome.session_id)
+        self.assertEqual(project.get("repo_name"), "ixion")
+        self.assertEqual(
+            Path(project.get("repo_root", "")).resolve(),
+            project_root.resolve(),
+        )
 
 
 if __name__ == "__main__":

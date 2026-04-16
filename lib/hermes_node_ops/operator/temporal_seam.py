@@ -20,6 +20,7 @@ from .harness.specialists import (
     get_specialist_spec,
     run_specialist,
 )
+from .project_memory import detect_project
 from .runtime import OperatorTurnResult, run_operator_turn
 from .session import create_session, session_dir
 from .tools import ToolExecutor
@@ -119,10 +120,23 @@ def invoke_operator_once(
 ) -> OperatorOutcome:
     """Invoke the operator once against the existing tool/session surface."""
     repo_root = Path(settings.repo_root)
+    project_ctx = detect_project()
+    project = (
+        {
+            "repo_root": project_ctx.repo_root,
+            "branch": project_ctx.branch,
+            "worktree": project_ctx.worktree,
+            "repo_name": project_ctx.repo_name,
+            "cwd": project_ctx.cwd,
+        }
+        if project_ctx.in_git_repo
+        else None
+    )
     session_id = create_session(
         repo_root,
         model=backend.model_name,
         resume=invocation.session_id,
+        project=project,
     )
     executor = ToolExecutor(settings, repo_root, session_id=session_id)
     turn = run_operator_turn(
@@ -335,4 +349,3 @@ def _outcome_from_turn(
         tool_limit_reached=turn.tool_limit_reached,
         synthesis_notes=tuple(turn.synthesis_notes),
     )
-

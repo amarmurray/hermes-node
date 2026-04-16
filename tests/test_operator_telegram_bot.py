@@ -9,6 +9,7 @@ real LLM.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -22,6 +23,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 from hermes_node_ops.config import Settings
 from hermes_node_ops.ledger import Ledger
 from hermes_node_ops.operator.backend import AssistantMessage, ToolCall
+from hermes_node_ops.operator.session import read_session_project
 from hermes_node_ops.operator.telegram.bot import TelegramBot
 from hermes_node_ops.operator.telegram.client import TelegramUpdate
 
@@ -96,6 +98,32 @@ def _make_settings(
     with Ledger(settings.ledger_db):
         pass
     return settings
+
+
+def _init_git_repo(path: Path) -> None:
+    result = subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return
+    subprocess.run(
+        ["git", "init"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-b", "main"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def _message_update(chat_id: int, text: str, *, update_id: int = 1) -> TelegramUpdate:
@@ -192,6 +220,7 @@ class SlashCommandTests(unittest.TestCase):
 class SessionMappingTests(unittest.TestCase):
     def test_session_marker_persists_per_chat(self) -> None:
         settings = _make_settings(allowed=(1001, 1002))
+        _init_git_repo(settings.repo_root)
         client = FakeClient()
         bot = TelegramBot(settings, FakeBackend(), client)  # type: ignore[arg-type]
 
@@ -206,11 +235,23 @@ class SessionMappingTests(unittest.TestCase):
 
     def test_rotate_session_creates_new_id(self) -> None:
         settings = _make_settings(allowed=(1001,))
+        _init_git_repo(settings.repo_root)
         bot = TelegramBot(settings, FakeBackend(), FakeClient())  # type: ignore[arg-type]
         first = bot._session_id_for_chat(1001)
         bot._rotate_session(1001)
         second = bot._session_id_for_chat(1001)
         self.assertNotEqual(first, second)
+
+    def test_session_project_is_stamped(self) -> None:
+        settings = _make_settings(allowed=(1001,))
+        _init_git_repo(settings.repo_root)
+        bot = TelegramBot(settings, FakeBackend(), FakeClient())  # type: ignore[arg-type]
+
+        sid = bot._session_id_for_chat(1001)
+
+        project = read_session_project(settings.repo_root, sid)
+        self.assertEqual(project.get("repo_name"), settings.repo_root.name)
+        self.assertEqual(project.get("repo_root"), str(settings.repo_root))
 
 
 class PersistenceTests(unittest.TestCase):

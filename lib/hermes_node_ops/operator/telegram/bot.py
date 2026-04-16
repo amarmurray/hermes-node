@@ -20,6 +20,7 @@ from ...ledger import Ledger
 from ..backend import ChatBackend
 from ..backend_policy import OperatorIntent, resolve_backend
 from ..harness import list_subagents, read_plan, read_todo_markdown
+from ..project_memory import detect_project
 from ..runtime import run_operator_turn
 from ..session import create_session
 from ..tools import ToolExecutor, get_tool_definitions
@@ -391,7 +392,23 @@ class TelegramBot:
                 return sid
 
         # Create a new session
-        sid = create_session(self.repo_root, model=self.backend.model_name)
+        project_ctx = detect_project(self.repo_root)
+        project = (
+            {
+                "repo_root": project_ctx.repo_root,
+                "branch": project_ctx.branch,
+                "worktree": project_ctx.worktree,
+                "repo_name": project_ctx.repo_name,
+                "cwd": project_ctx.cwd,
+            }
+            if project_ctx.in_git_repo
+            else None
+        )
+        sid = create_session(
+            self.repo_root,
+            model=self.backend.model_name,
+            project=project,
+        )
         marker_path.write_text(sid, encoding="utf-8")
         return sid
 

@@ -39,7 +39,24 @@ def run_repl(
 ) -> None:
     """Run the interactive operator REPL."""
     repo_root = settings.repo_root
-    sid = create_session(repo_root, model=backend.model_name, resume=session_id)
+    project_ctx = detect_project()
+    project = (
+        {
+            "repo_root": project_ctx.repo_root,
+            "branch": project_ctx.branch,
+            "worktree": project_ctx.worktree,
+            "repo_name": project_ctx.repo_name,
+            "cwd": project_ctx.cwd,
+        }
+        if project_ctx.in_git_repo
+        else None
+    )
+    sid = create_session(
+        repo_root,
+        model=backend.model_name,
+        resume=session_id,
+        project=project,
+    )
     executor = ToolExecutor(settings, repo_root, session_id=sid)
 
     print(f"hermes-node operator ({backend.model_name})")
