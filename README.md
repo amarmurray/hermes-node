@@ -1,16 +1,25 @@
-# hermes-node v0.6
+# hermes-node
 
-`hermes-node` is a thin operator wrapper around the already-working upstream [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) install on the VPS.
+`hermes-node` is the constitutional membrane and resident cognitive
+operator that sits on top of the upstream
+[`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent)
+install on the VPS. It does not reimplement Hermes internals.
 
-It does not reimplement Hermes internals. The wrapper owns:
+The node owns:
 
-1. local operator ingress
-2. a SQLite run ledger
-3. durable task workspaces
-4. JSONL wrapper logs
-5. queue execution and approval gates
+1. the membrane — ledger, routing, approvals, workspaces, receipts
+2. the resident cognitive operator (terminal + Telegram ingresses)
+3. the Deep-Agents-style harness (plans, scratchpads, todos, callable specialists)
+4. a repo registry for the repos the operator is allowed to act on
+5. the seam future schedulers (Temporal) will call through
 
-Upstream Hermes remains the execution runtime.
+Upstream Hermes remains the execution runtime. Codex is one executor
+lane behind the membrane.
+
+The architecture is structurally complete. The current bottleneck is
+operator usefulness / cognition quality, not substrate existence. See
+[docs/stack-evolution.md](docs/stack-evolution.md) for the canonical map
+and the near-term roadmap.
 
 ## Separation
 
@@ -39,52 +48,60 @@ The intended next step is wrapper CLI ingress first, then a local-only API ingre
 
 ## Roadmap
 
-Canonical topology and phase map:
+Canonical map: [docs/stack-evolution.md](docs/stack-evolution.md).
+Operator detail: [docs/operator-architecture.md](docs/operator-architecture.md).
 
-- [docs/stack-evolution.md](docs/stack-evolution.md)
-- [docs/operator-architecture.md](docs/operator-architecture.md)
-- [docs/phase3-runtime-and-temporal-seam.md](docs/phase3-runtime-and-temporal-seam.md)
-- [docs/hermes-capability-registry.md](docs/hermes-capability-registry.md)
+Where we are now:
 
-Stack evolution:
+- upstream Hermes, Hermes-node membrane, operator, ingresses, repo
+  registry, Deep-Agents harness, specialists, Codex lane, and the
+  Temporal seam are all live
+- the architecture is structurally complete — we are no longer in
+  bootstrap mode
+- the current bottleneck is operator quality and specialist usefulness,
+  not architecture
 
-- Upstream Hermes: runtime substrate
-- Hermes-node: constitutional membrane
-- Operator: resident conversational foreman, the human wedge into the substrate
-- Deep Agents: later operator harness, then specialist suboperator harness
-- Temporal: later durable orchestrator and scheduler above hermes-node
-- Executors: Codex, Hermes/OpenRouter, later Claude, later specialist lanes
+Next phases:
 
-Near-term roadmap:
+1. **Next** — operator runtime strategy and specialist usefulness
+   (resident-local quality, remote escalation slot, reliable callable
+   specialists)
+2. **Then** — Codex lane hardening (manifests, receipts, durability,
+   sandbox envelope)
+3. **Then** — Temporal above Hermes-node for durable orchestration
+4. **Later** — selective autonomization of specialists (manifest
+   subscriptions flipped one at a time)
+5. **Later** — richer surfaces like a Mini App on top of operator +
+   Hermes-node, never on raw upstream Hermes
 
-1. terminal-first operator on VPS
-2. local OSS model for always-on operator
-3. tool-mediated interaction with hermes-node
-4. Telegram comms wedge
-5. Deep Agents layered into operator
-6. callable specialist suboperators
-7. selectively autonomized specialist suboperators
-8. Temporal above hermes-node
-9. selective activation of broader upstream Hermes capabilities where they reinforce the membrane
+Intentionally deferred: Temporal engine itself, specialist autonomy,
+TreasuryOS repo (future-slot only until it exists), broader upstream
+Hermes capabilities that haven't been wrapped by the membrane yet.
 
 Design rules:
 
-- operator thinks through hermes-node, not around it
-- governance before autonomy
-- durable state lives in workspaces, receipts, and session artifacts, not process memory
-- no direct bypass of ledger, approvals, or routing
-- suboperators become bounded organs, not rogue daemons
+- operator thinks through Hermes-node, not around it
+- operator is substrate-native, not surface-native
+- governance propagates downward before autonomy does
+- durable state lives in workspaces, receipts, and session artifacts — not process memory
+- upstream Hermes capabilities become autonomous only after the membrane wraps them
+- specialists are bounded organs, not rogue daemons
 
-## Operator Runtime
+## Operator runtime
 
-Phase 3 adds three operator-facing layers without changing the membrane:
+Shared across ingresses — the same turn runtime powers the terminal REPL
+and the Telegram bot, and is what any future scheduler (Temporal) will
+call through. Details: [docs/phase3-runtime-and-temporal-seam.md](docs/phase3-runtime-and-temporal-seam.md).
 
-- shared terminal/Telegram operator turn runtime
-- natural-language response synthesis over grounded tool results
-- a future Temporal invoke seam returning structured operator outcomes
+Key properties:
 
-This improves operator cognition and answer quality without turning the
-operator into a second orchestrator.
+- one grounded tool surface shared by every ingress
+- natural-language response synthesis on top of grounded tool results
+- action-completion guard against narration-without-action
+- backend policy with a resident-local slot primary and a remote
+  escalation slot available when needed
+- structured invoke seam returning approval / task / plan outcomes for
+  future schedulers — Temporal will consume this, not reimplement it
 
 ## Supported task kinds
 

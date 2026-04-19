@@ -8,6 +8,28 @@ Canonical stack map: [stack-evolution.md](stack-evolution.md)
 Runtime and future scheduler seam: [phase3-runtime-and-temporal-seam.md](phase3-runtime-and-temporal-seam.md)
 Upstream membrane inventory: [hermes-capability-registry.md](hermes-capability-registry.md)
 
+## Current reality
+
+The operator exists and is usable on a local 1.7B OSS model. The
+architecture (membrane, ingresses, harness, specialists, Temporal seam)
+is structurally complete.
+
+The operator's **cognition quality** is now the live constraint — tool
+selection, grounding, anti-narration, and specialist usefulness. The next
+phase is improving operator usefulness, not adding another surface or
+control plane. See [stack-evolution.md](stack-evolution.md) for the
+canonical roadmap ladder.
+
+Priorities, in order:
+
+1. operator runtime strategy — resident local quality plus a heavier
+   remote escalation slot for intents the resident model can't land
+2. specialist hardening — make callable specialists reliably useful with
+   clean receipts, before flipping any autonomy flags
+3. Codex lane hardening — manifests, receipts, durability, sandbox envelope
+4. only then Temporal above Hermes-node, then selective autonomization,
+   then new surfaces (Mini App) on top of operator + Hermes-node
+
 ## Topology
 
 ```
@@ -24,30 +46,31 @@ Human
 
 ## Stack map
 
-- Upstream Hermes: runtime substrate
-- Hermes-node: constitutional membrane
-- Operator: resident conversational foreman and wedge into the substrate
-- Deep Agents: later harness for the operator, then bounded specialist suboperators
-- Temporal: later durable orchestrator above hermes-node
-- Executors under hermes-node: Codex, Hermes/OpenRouter, later Claude, later specialist lanes
+- Upstream Hermes: runtime substrate (live)
+- Hermes-node: constitutional membrane (live)
+- Operator: resident cognitive foreman and wedge into the substrate (live)
+- Terminal + Telegram: current ingresses into the same operator (live)
+- Deep-Agents-style harness: layered inside the operator — plans, scratchpads,
+  todos, callable specialists (live)
+- Codex lane: one executor behind Hermes-node's routing policy (live, hardening)
+- Temporal: later durable orchestrator above Hermes-node, consumes the existing
+  invoke seam
+- Mini App: later surface on top of operator + Hermes-node, not raw Hermes
 
-Near-term sequence:
-
-1. terminal-first operator on the VPS
-2. local OSS model as the always-on foreman
-3. tool-mediated interaction through hermes-node, never around it
-4. Telegram later as another ingress wedge into the same operator
-5. Deep Agents later as operator harness
-6. specialist suboperators later, first callable then selectively autonomized
-7. Temporal later above hermes-node
-8. broader upstream Hermes capabilities only when they reinforce the membrane
+For the canonical ladder (next / then / later) see
+[stack-evolution.md](stack-evolution.md).
 
 Design rules:
 
+- operator thinks through Hermes-node, never around it
+- operator is substrate-native, not surface-native
 - governance propagates downward before autonomy does
-- durable state belongs in workspaces, receipts, sessions, and notes, not live process memory
-- upstream Hermes capabilities should be wrapped by hermes-node policy before autonomous use
-- specialist suboperators should become bounded, receipt-emitting, policy-constrained organs
+- durable state belongs in workspaces, receipts, sessions, plans, and notes —
+  not in live process memory
+- upstream Hermes capabilities become autonomous behavior only after the
+  membrane wraps them
+- specialist suboperators are bounded, receipt-emitting, policy-constrained
+  organs — not rogue daemons
 
 ## What the operator is
 
