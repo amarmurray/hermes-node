@@ -74,8 +74,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "get_queue_status",
             "description": (
-                "Get hermes-node queue overview: task counts by state, "
-                "recent tasks, recent runs, deferred tasks, active cooldowns."
+                "Get the live queue state: counts by state (queued/running/etc.), "
+                "deferred tasks, and active cooldowns. "
+                "Use this for 'what is the queue doing right now?' questions. "
+                "Do NOT use for task history — use list_recent_tasks for that."
             ),
             "parameters": {
                 "type": "object",
@@ -168,7 +170,13 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_recent_tasks",
-            "description": "List the most recent tasks in the hermes-node queue.",
+            "description": (
+                "List the most recent tasks from the hermes-node ledger (task history). "
+                "Use this for 'what tasks are in the ledger?', 'recent tasks', "
+                "'task history', or 'what has been submitted?' questions. "
+                "This returns historical tasks across all states; for live queue "
+                "counts use get_queue_status instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -363,7 +371,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "summarize_repo_state",
-            "description": "Summarize current branch, HEAD, cleanliness, and recent commits for a repo.",
+            "description": (
+                "Get the current branch, HEAD, working-tree cleanliness, and "
+                "recent commits for a repo. Use this for questions like "
+                "'what branch is X on?', 'what is the status of X?', or "
+                "'is X clean?'. Takes a repo_path (filesystem path)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -407,7 +420,13 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "find_repo_relevance",
-            "description": "Find files likely relevant to a repo question using file paths and grep-style evidence.",
+            "description": (
+                "Search a repo for FILES relevant to a query/topic/symbol. "
+                "Use this only when looking for code locations or file paths. "
+                "Do NOT use this for questions about branch, status, cleanliness, "
+                "or recent activity — use summarize_repo_state or "
+                "grounded_repo_summary for those."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
