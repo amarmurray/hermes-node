@@ -501,6 +501,19 @@ class RepoToolTests(unittest.TestCase):
             self.assertNotIn("error", data)
             # unresolved alias would have produced a path-not-found style error
 
+            # LLMs often fabricate placeholder paths like "/path/to/<alias>".
+            # Resolver should recover by treating the basename as an alias.
+            data = json.loads(
+                executor.dispatch(
+                    "git_status", {"repo_path": "/path/to/fixture"}
+                )
+            )
+            self.assertNotIn("error", data)
+            self.assertIn("branch", data)
+            self.assertEqual(
+                Path(data["repo_path"]).resolve(), repo_path.resolve()
+            )
+
     def test_repo_awareness_tool_dispatch(self) -> None:
         settings = _make_settings()
         executor = ToolExecutor(settings, settings.repo_root)

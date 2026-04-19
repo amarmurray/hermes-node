@@ -1044,12 +1044,22 @@ class ToolExecutor:
             if probe.is_absolute() and probe.exists():
                 return str(probe.resolve())
         except (OSError, ValueError):
-            pass
+            probe = None  # type: ignore[assignment]
         try:
             registry = RepoRegistry.load(self.repo_root)
             entry = registry.find(value)
             if entry is not None:
                 return str(entry.resolved_path())
+            # LLMs sometimes synthesize fake paths like "/path/to/ixion"
+            # when they "know" the alias but don't know the real path.
+            # If the input looks like a path that doesn't exist, try
+            # the final path component as an alias.
+            if probe is not None and "/" in value:
+                basename = probe.name
+                if basename:
+                    entry = registry.find(basename)
+                    if entry is not None:
+                        return str(entry.resolved_path())
         except Exception:
             pass
         return value
