@@ -79,6 +79,7 @@ PROMPTS: list[dict] = [
             "grounded_repo_summary",
             "get_repo_registry_entry",
             "summarize_changed_files",
+            "git_status",
         ],
         "expect_no_narration": True,
         "category": "multi_tool",

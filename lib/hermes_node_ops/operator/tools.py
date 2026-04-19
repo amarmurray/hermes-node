@@ -334,7 +334,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "repo_path": {
                         "type": "string",
-                        "description": "Path to the git repository",
+                        "description": "Registered repo name/alias (e.g. 'ixion') or an absolute filesystem path",
                     },
                 },
                 "required": ["repo_path"],
@@ -351,7 +351,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "repo_path": {
                         "type": "string",
-                        "description": "Path to the repository or repo subdirectory",
+                        "description": "Registered repo name/alias (e.g. 'ixion') or an absolute filesystem path",
                     },
                     "max_depth": {
                         "type": "integer",
@@ -382,7 +382,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "repo_path": {
                         "type": "string",
-                        "description": "Path to the repository or repo subdirectory",
+                        "description": "Registered repo name/alias (e.g. 'ixion') or an absolute filesystem path",
                     },
                     "mode": {
                         "type": "string",
@@ -404,7 +404,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "repo_path": {
                         "type": "string",
-                        "description": "Path to the repository or repo subdirectory",
+                        "description": "Registered repo name/alias (e.g. 'ixion') or an absolute filesystem path",
                     },
                     "mode": {
                         "type": "string",
@@ -432,7 +432,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "repo_path": {
                         "type": "string",
-                        "description": "Path to the repository or repo subdirectory",
+                        "description": "Registered repo name/alias (e.g. 'ixion') or an absolute filesystem path",
                     },
                     "query": {
                         "type": "string",
@@ -462,7 +462,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "repo_path": {
                         "type": "string",
-                        "description": "Path to the repository or repo subdirectory",
+                        "description": "Registered repo name/alias (e.g. 'ixion') or an absolute filesystem path",
                     },
                     "limit": {
                         "type": "integer",
@@ -488,7 +488,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "repo_path": {
                         "type": "string",
-                        "description": "Path to the repository or repo subdirectory",
+                        "description": "Registered repo name/alias (e.g. 'ixion') or an absolute filesystem path",
                     },
                     "kind": {
                         "type": "string",
@@ -536,7 +536,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "repo_path": {
                         "type": "string",
-                        "description": "Path to the repository or repo subdirectory",
+                        "description": "Registered repo name/alias (e.g. 'ixion') or an absolute filesystem path",
                     },
                     "goal": {
                         "type": "string",
@@ -1027,6 +1027,33 @@ class ToolExecutor:
         except Exception as exc:
             return json.dumps({"error": str(exc)})
 
+    def _resolve_repo_arg(self, value: str) -> str:
+        """Resolve a user-supplied repo arg to an absolute filesystem path.
+
+        Accepts either a filesystem path (existing directory) or a
+        registered name/alias. This lets small LLMs call path-taking
+        tools with the repo's name (e.g. 'ixion') without having to
+        chain a registry lookup first. If the input is neither a
+        valid path nor a registered name, returns the original value
+        unchanged so the tool's own error path can report it.
+        """
+        if not value:
+            return value
+        try:
+            probe = Path(value).expanduser()
+            if probe.is_absolute() and probe.exists():
+                return str(probe.resolve())
+        except (OSError, ValueError):
+            pass
+        try:
+            registry = RepoRegistry.load(self.repo_root)
+            entry = registry.find(value)
+            if entry is not None:
+                return str(entry.resolved_path())
+        except Exception:
+            pass
+        return value
+
     @staticmethod
     def _preview(text: str, limit: int = 240) -> str:
         text = text.strip()
@@ -1349,7 +1376,8 @@ class ToolExecutor:
         }
 
     def _tool_git_status(self, repo_path: str) -> dict[str, Any]:
-        target = Path(repo_path).expanduser().resolve()
+        resolved = self._resolve_repo_arg(repo_path)
+        target = Path(resolved).expanduser().resolve()
         if not target.exists():
             return {"error": f"Path does not exist: {repo_path}"}
 
@@ -1386,21 +1414,21 @@ class ToolExecutor:
         max_depth: int = 2,
         mode: str = "brief",
     ) -> dict[str, Any]:
-        return summarize_repo_map(repo_path, max_depth=max_depth, mode=mode)
+        return summarize_repo_map(self._resolve_repo_arg(repo_path), max_depth=max_depth, mode=mode)
 
     def _tool_summarize_repo_state(
         self,
         repo_path: str,
         mode: str = "brief",
     ) -> dict[str, Any]:
-        return summarize_repo_state(repo_path, mode=mode)
+        return summarize_repo_state(self._resolve_repo_arg(repo_path), mode=mode)
 
     def _tool_summarize_changed_files(
         self,
         repo_path: str,
         mode: str = "brief",
     ) -> dict[str, Any]:
-        return summarize_changed_files(repo_path, mode=mode)
+        return summarize_changed_files(self._resolve_repo_arg(repo_path), mode=mode)
 
     def _tool_find_repo_relevance(
         self,
@@ -1409,7 +1437,7 @@ class ToolExecutor:
         limit: int = 8,
         mode: str = "brief",
     ) -> dict[str, Any]:
-        return find_repo_relevance(repo_path, query, limit=limit, mode=mode)
+        return find_repo_relevance(self._resolve_repo_arg(repo_path), query, limit=limit, mode=mode)
 
     def _tool_summarize_repo_activity(
         self,
@@ -1421,7 +1449,7 @@ class ToolExecutor:
             return summarize_repo_activity(
                 self.repo_root,
                 ledger,
-                repo_path,
+                self._resolve_repo_arg(repo_path),
                 limit=limit,
                 mode=mode,
             )
@@ -1436,7 +1464,7 @@ class ToolExecutor:
             return compare_repo_to_last_successful_run(
                 self.repo_root,
                 ledger,
-                repo_path,
+                self._resolve_repo_arg(repo_path),
                 kind=kind,
                 mode=mode,
             )

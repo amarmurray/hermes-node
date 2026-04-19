@@ -471,6 +471,36 @@ class RepoToolTests(unittest.TestCase):
             # Should still return something (maybe empty branch)
             self.assertIn("repo_path", data)
 
+    def test_path_taking_tools_accept_registered_alias(self) -> None:
+        """Tools that take repo_path must also accept a registered
+        name/alias, so small LLMs can call them without first chaining
+        a registry lookup."""
+        settings = _make_settings()
+        executor = ToolExecutor(settings, settings.repo_root)
+        with tempfile.TemporaryDirectory() as repo_tmp:
+            repo_path = Path(repo_tmp)
+            _init_git_repo(repo_path)
+            _register_temp_repo(settings.repo_root, "fixture", repo_path)
+
+            # git_status with the alias — should resolve to repo_path and not error
+            data = json.loads(
+                executor.dispatch("git_status", {"repo_path": "fixture"})
+            )
+            self.assertNotIn("error", data)
+            self.assertIn("branch", data)
+            self.assertEqual(Path(data["repo_path"]).resolve(), repo_path.resolve())
+
+            # summarize_repo_state with the alias — should return a mapping
+            # with state keys (branch, etc.), not an error payload.
+            data = json.loads(
+                executor.dispatch(
+                    "summarize_repo_state",
+                    {"repo_path": "fixture", "mode": "brief"},
+                )
+            )
+            self.assertNotIn("error", data)
+            # unresolved alias would have produced a path-not-found style error
+
     def test_repo_awareness_tool_dispatch(self) -> None:
         settings = _make_settings()
         executor = ToolExecutor(settings, settings.repo_root)
