@@ -7,6 +7,7 @@ through the parent operator.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -267,6 +268,36 @@ def _run_patch_review(
         except OSError:
             pass
 
+    # Auto-resolve: if the caller gave neither a path nor an id but did
+    # supply a repo_root, pick the most recently modified proposal.md
+    # under state/operator_sessions/*/patches/*/. This lets the operator
+    # say "review the latest proposal" without knowing its id.
+    if not proposal_md and not proposal_path_raw and not proposal_id and repo_root_raw:
+        try:
+            sessions_dir = Path(repo_root_raw) / "state" / "operator_sessions"
+            if sessions_dir.exists():
+                candidates: list[Path] = []
+                for sess in sessions_dir.iterdir():
+                    patches_dir = sess / "patches"
+                    if not patches_dir.is_dir():
+                        continue
+                    for pdir in patches_dir.iterdir():
+                        pm = pdir / "proposal.md"
+                        if pm.is_file():
+                            candidates.append(pm)
+                if candidates:
+                    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                    latest = candidates[0]
+                    try:
+                        proposal_md = latest.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        resolved_path = str(latest)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
     if not proposal_md:
         label = proposal_path_raw or proposal_id or "(unspecified)"
         lines = [
@@ -281,6 +312,9 @@ def _run_patch_review(
             "",
             "## Recommendation",
             "- Provide a valid `proposal_path` or both `proposal_id` and `repo_root` in context.",
+            "",
+            "## Bottom line",
+            f"No patch proposal could be resolved for {label}.",
         ]
         return "\n".join(lines).strip() + "\n"
 
@@ -311,6 +345,12 @@ def _run_patch_review(
         "",
         "## Recommendation",
         "- Read the proposal above, then route any approval through the hermes-node approvals flow.",
+        "",
+        "## Bottom line",
+        (
+            f"Patch proposal at {resolved_path} is readable and targets "
+            f"{target_repo or 'an unknown repo'}; route approval through hermes-node."
+        ),
     ]
     return "\n".join(lines).strip() + "\n"
 
@@ -514,6 +554,26 @@ def _run_repo_diagnostician(
     )
 
 
+def _derive_bottom_line(summary: str, recommendations: list[str]) -> str:
+    """One short sentence the operator can lift into a reply.
+
+    Falls back to the first sentence of the summary, then the first
+    recommendation, then a terse "no signal" default. Kept compact so
+    the resident model can relay it verbatim.
+    """
+    text = (summary or "").strip()
+    if text:
+        # First sentence, truncated.
+        first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0].strip()
+        if first:
+            return first[:220]
+    if recommendations:
+        first_rec = recommendations[0].strip()
+        if first_rec:
+            return first_rec[:220]
+    return "No actionable signal surfaced."
+
+
 def _render_specialist_report(
     *,
     title: str,
@@ -524,6 +584,7 @@ def _render_specialist_report(
     recommendations: list[str],
     provenance: list[str],
     context: str = "",
+    bottom_line: str = "",
 ) -> str:
     lines = [
         f"# {title}",
@@ -551,4 +612,8 @@ def _render_specialist_report(
     for item in provenance:
         if item:
             lines.append(f"- {item}")
+    # Bottom line: always present, one sentence. Parent operator lifts
+    # this into its synthesized reply to the human.
+    bl = (bottom_line or _derive_bottom_line(summary, recommendations)).strip()
+    lines.extend(["", "## Bottom line", bl or "No actionable signal surfaced."])
     return "\n".join(lines).strip() + "\n"

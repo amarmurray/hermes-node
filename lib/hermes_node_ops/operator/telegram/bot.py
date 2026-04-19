@@ -18,8 +18,9 @@ from ...config import Settings
 from ...jsonl import append_jsonl, utcnow
 from ...ledger import Ledger
 from ..backend import ChatBackend
-from ..backend_policy import OperatorIntent, resolve_backend
+from ..backend_policy import BackendSlot, OperatorIntent, resolve_backend
 from ..harness import list_subagents, read_plan, read_todo_markdown
+from ..intent import infer_intent
 from ..project_memory import detect_project
 from ..runtime import run_operator_turn
 from ..session import create_session
@@ -293,9 +294,49 @@ class TelegramBot:
 
         # Typing indicator
         self.client.send_chat_action(update.chat_id, "typing")
+
+        # Per-turn intent inference + backend selection. Chat intents stay on
+        # the resident local slot; repo-diagnostic / plan / tool-dense intents
+        # prefer the escalation remote if configured. Failures fall back to
+        # the default backend wired at bot startup.
+        inference = infer_intent(text)
+        turn_backend: ChatBackend = self.backend
+        # Only switch off the default (resident) backend when the policy
+        # actually picks the escalation slot AND the escalation slot is
+        # configured. Keeps tests / lightweight deployments working even
+        # without a remote slot set up.
+        try:
+            _cand, selection = resolve_backend(
+                self.settings,
+                intent=inference.intent,
+                timeout_seconds=getattr(self.backend, "timeout_seconds", 0) or 0,
+            )
+            if (
+                selection.descriptor.slot == BackendSlot.ESCALATION_REMOTE
+                and selection.descriptor.is_configured
+            ):
+                turn_backend = _cand
+            self._log(
+                "intent_inferred",
+                chat_id=update.chat_id,
+                intent=inference.intent.value,
+                signal=inference.signal,
+                slot=selection.descriptor.slot.value,
+                model=selection.descriptor.model,
+                used_default_backend=turn_backend is self.backend,
+            )
+        except Exception as exc:  # noqa: BLE001
+            turn_backend = self.backend
+            self._log(
+                "intent_resolve_failed",
+                chat_id=update.chat_id,
+                intent=inference.intent.value,
+                error=str(exc),
+            )
+
         result = run_operator_turn(
             settings=self.settings,
-            backend=self.backend,
+            backend=turn_backend,
             executor=executor,
             repo_root=self.repo_root,
             session_id=sid,

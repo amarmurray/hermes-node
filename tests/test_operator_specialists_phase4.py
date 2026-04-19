@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -54,6 +57,58 @@ class Phase4SpecialistTests(unittest.TestCase):
         )
         self.assertIsInstance(report, str)
         self.assertIn("not found", report.lower())
+
+    def test_patch_review_not_found_has_bottom_line(self) -> None:
+        report = run_specialist(
+            "patch-review",
+            "review",
+            {"proposal_id": "does-not-exist"},
+        )
+        self.assertIn("## Bottom line", report)
+
+    def test_patch_review_auto_resolves_latest_proposal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "state" / "operator_sessions"
+            # two proposals, different sessions and mtimes
+            older = sessions / "sess_a" / "patches" / "patch_old" / "proposal.md"
+            older.parent.mkdir(parents=True, exist_ok=True)
+            older.write_text(
+                "# Patch Proposal (old)\n\n- repo: /tmp/foo\n", encoding="utf-8"
+            )
+            newer = sessions / "sess_b" / "patches" / "patch_new" / "proposal.md"
+            newer.parent.mkdir(parents=True, exist_ok=True)
+            newer.write_text(
+                "# Patch Proposal (new)\n\n- repo: /tmp/bar\n", encoding="utf-8"
+            )
+            # Force newer mtime to be later than older.
+            now = time.time()
+            os.utime(older, (now - 100, now - 100))
+            os.utime(newer, (now, now))
+
+            report = run_specialist(
+                "patch-review",
+                "review the latest",
+                {"repo_root": str(root)},
+            )
+            self.assertIn("## Bottom line", report)
+            self.assertIn("patch_new", report)
+            self.assertNotIn("not found", report.lower())
+
+    def test_patch_review_has_bottom_line_when_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prop = root / "proposal.md"
+            prop.write_text(
+                "# Proposal\n\n- repo: /tmp/myrepo\n", encoding="utf-8"
+            )
+            report = run_specialist(
+                "patch-review",
+                "review",
+                {"proposal_path": str(prop)},
+            )
+            self.assertIn("## Bottom line", report)
+            self.assertIn("/tmp/myrepo", report)
 
 
 if __name__ == "__main__":

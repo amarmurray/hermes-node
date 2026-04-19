@@ -15,12 +15,14 @@ from pathlib import Path
 
 from ..config import Settings
 from .backend import ChatBackend, ToolCall
+from .backend_policy import BackendSlot, OperatorIntent, resolve_backend
 from .harness import (
     list_subagents,
     read_plan,
     read_todo_markdown,
 )
 from .harness.specialists import SPECIALIST_ROLES
+from .intent import infer_intent
 from .project_memory import detect_project, render_memory_layers
 from .runtime import run_operator_turn
 from .session import append_note, create_session, read_notes
@@ -99,10 +101,43 @@ def run_repl(
                     break
                 continue
 
+            # Classify intent per turn and resolve the backend slot that
+            # suits it. Resident local stays primary for CHAT/APPROVAL_BRIEF;
+            # PLAN/REPO_DIAGNOSTIC/TOOL_DENSE prefer the escalation remote
+            # if one is configured (falls through to resident otherwise).
+            inference = infer_intent(user_input)
+            turn_backend: ChatBackend = backend
+            turn_selection = None
+            try:
+                _cand, turn_selection = resolve_backend(
+                    settings,
+                    intent=inference.intent,
+                    timeout_seconds=getattr(backend, "timeout_seconds", 0) or 0,
+                )
+                # Only actually switch off the default REPL backend when the
+                # policy picks the escalation slot and it is configured.
+                # Otherwise we stay on the backend the user started with —
+                # this preserves explicit --model / --base-url overrides.
+                if (
+                    turn_selection.descriptor.slot == BackendSlot.ESCALATION_REMOTE
+                    and turn_selection.descriptor.is_configured
+                ):
+                    turn_backend = _cand
+            except Exception:  # noqa: BLE001
+                turn_backend = backend  # conservative: reuse the REPL default
+            if _verbose_mode and turn_selection is not None:
+                slot = turn_selection.descriptor.slot.value
+                model = turn_selection.descriptor.model
+                print(
+                    f"\x1b[2m[intent={inference.intent.value} "
+                    f"signal={inference.signal} "
+                    f"slot={slot} model={model}]\x1b[0m"
+                )
+
             # Record user message — hooks only fire in verbose mode
             result = run_operator_turn(
                 settings=settings,
-                backend=backend,
+                backend=turn_backend,
                 executor=executor,
                 repo_root=repo_root,
                 session_id=sid,
