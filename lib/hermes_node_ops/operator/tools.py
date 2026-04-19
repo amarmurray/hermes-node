@@ -820,9 +820,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "grounded_repo_summary",
             "description": (
-                "Produce a grounded summary of a registered repo: registry metadata, "
-                "presence probe, repo-aware state/change/map summaries, and recent "
-                "ledger activity. Refuses if the repo is absent or unregistered."
+                "PREFERRED for 'what is the branch/status of <repo>?' questions "
+                "when the user refers to a repo by name or alias (e.g. 'ixion'). "
+                "Returns live branch, working-tree status, recent commits, file "
+                "map, changed files, plus registry metadata and recent ledger "
+                "activity. Takes name_or_alias (not a filesystem path). "
+                "Refuses if the repo is absent or unregistered."
             ),
             "parameters": {
                 "type": "object",

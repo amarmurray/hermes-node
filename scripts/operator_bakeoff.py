@@ -58,9 +58,10 @@ PROMPTS: list[dict] = [
     {
         "id": "ledger_tasks",
         "prompt": "what tasks are in the ledger right now?",
-        "expect_tools": ["list_recent_tasks"],
+        "expect_tools": ["list_recent_tasks", "get_queue_status"],
         "expect_no_narration": True,
         "category": "simple_tool",
+        "note": "Either tool surfaces recent tasks; list_recent_tasks is leaner.",
     },
     {
         "id": "specialist_rec",
