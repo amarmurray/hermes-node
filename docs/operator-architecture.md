@@ -8,19 +8,21 @@ Canonical stack map: [stack-evolution.md](stack-evolution.md)
 Runtime and future scheduler seam: [phase3-runtime-and-temporal-seam.md](phase3-runtime-and-temporal-seam.md)
 Upstream membrane inventory: [hermes-capability-registry.md](hermes-capability-registry.md)
 
-## Current reality
+## Implementation and validation status
 
-The operator exists and is usable on a local 1.7B OSS model. The
-architecture (membrane, ingresses, harness, specialists, Temporal seam)
-is structurally complete.
+The shared operator runtime, terminal and Telegram ingresses, planning tools,
+callable specialists, and future scheduler interface are implemented. April 2026
+development experiments used a local 1.7B model and exposed tool-selection,
+grounding, and narration-without-action failures that informed subsequent fixes.
+Those records describe the development setup rather than current service uptime.
 
-The operator's **cognition quality** is now the live constraint — tool
-selection, grounding, anti-narration, and specialist usefulness. The next
-phase is improving operator usefulness, not adding another surface or
-control plane. See [stack-evolution.md](stack-evolution.md) for the
-canonical roadmap ladder.
+The [offline demo](demo.md) verifies the underlying approval, persistence, and
+retry lifecycle with a fake provider. The author has not yet completed a real
+repository task through this stack. The next milestone is a bounded task from
+repository inspection through an approved change and reviewable diff/receipt,
+followed by repeated runs that record failures and human interventions.
 
-Priorities, in order:
+Implementation priorities supporting that milestone:
 
 1. operator runtime strategy — resident local quality plus a heavier
    remote escalation slot for intents the resident model can't land
@@ -32,27 +34,21 @@ Priorities, in order:
 
 ## Topology
 
-```
-Human
-  -> terminal REPL (later: Telegram)
-  -> operator LLM
-  -> hermes-node tool surface (Python interfaces / CLI)
-  -> routing / approvals / ledger / workspaces
-  -> executors (Codex, OpenRouter/Hermes, later Claude)
-  -> receipts / notes / artifacts
-  -> operator reads them back
-  -> reports to human
-```
+Terminal and Telegram share the operator turn runtime and tool surface. The
+operator reads state, creates plans, and submits bounded tasks. The queue worker
+handles routing and execution through Hermes or Codex, writes results to
+workspaces and the ledger, and makes those records available to the operator.
 
 ## Stack map
 
-- Upstream Hermes: runtime substrate (live)
-- Hermes-node: constitutional membrane (live)
-- Operator: resident cognitive foreman and wedge into the substrate (live)
-- Terminal + Telegram: current ingresses into the same operator (live)
+- Upstream Hermes: external runtime accessed through the wrapper
+- Hermes-node: implemented ledger, routing, approval, and artifact layer
+- Operator: implemented conversational and planning runtime
+- Terminal + Telegram: implemented ingresses into the same operator
 - Deep-Agents-style harness: layered inside the operator — plans, scratchpads,
-  todos, callable specialists (live)
-- Codex lane: one executor behind Hermes-node's routing policy (live, hardening)
+  todos, callable specialists
+- Codex lane: implemented adapter behind Hermes-node's routing policy; further
+  hardening and real-task validation are planned
 - Temporal: later durable orchestrator above Hermes-node, consumes the existing
   invoke seam
 - Mini App: later surface on top of operator + Hermes-node, not raw Hermes
@@ -77,7 +73,7 @@ Design rules:
 - A foreman, not a coder
 - Routing-aware and approval-conscious
 - A client of hermes-node's control plane
-- Backed by a local/self-hosted small OSS model (24/7 VPS)
+- Configurable with a local/self-hosted model or a compatible remote backend
 
 ## What the operator is NOT
 
@@ -130,10 +126,11 @@ Task execution happens through the existing queue worker (`hermes-node run --wat
 | `diagnose_failed_task` | Failure diagnosis from runs, events, and workspace receipts |
 | `prepare_patch_proposal_plan` | Bounded mutation plan without submitting or mutating |
 
-## Golden workflows
+## Repository workflow to validate
 
-The operator can now handle a first useful repo workflow loop without leaving
-the membrane:
+The implemented tools support the following inspection and planning sequence.
+The next real-task validation should exercise it with independently checked
+outputs:
 
 1. answer a repo-structure question
 2. summarize current branch/worktree state

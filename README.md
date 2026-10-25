@@ -1,395 +1,177 @@
-# hermes-node
+# Hermes-node
 
-`hermes-node` is the constitutional membrane and resident cognitive
-operator that sits on top of the upstream
-[`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent)
-install on the VPS. It does not reimplement Hermes internals.
+An experimental Python control layer for persistent, inspectable agent work.
+It sits around [Nous Research's Hermes Agent](https://github.com/NousResearch/hermes-agent)
+and the Codex CLI, adding task tracking, approval records, retry handling,
+execution artifacts, and a shared operator interface for terminal and Telegram.
 
-The node owns:
+Built with AI coding assistance. Hermes and Codex provide the underlying agent
+execution; this repository contains the integration and operating layer.
 
-1. the membrane — ledger, routing, approvals, workspaces, receipts
-2. the resident cognitive operator (terminal + Telegram ingresses)
-3. the Deep-Agents-style harness (plans, scratchpads, todos, callable specialists)
-4. a repo registry for the repos the operator is allowed to act on
-5. the seam future schedulers (Temporal) will call through
+**Personal prototype with a runnable offline demonstration.** Start below to
+inspect the approval, persistence, and retry behavior in a couple of seconds.
 
-Upstream Hermes remains the execution runtime. Codex is one executor
-lane behind the membrane.
+## Try it without keys
 
-The architecture is structurally complete. The current bottleneck is
-operator usefulness / cognition quality, not substrate existence. See
-[docs/stack-evolution.md](docs/stack-evolution.md) for the canonical map
-and the near-term roadmap.
-
-## Separation
-
-### 1. Upstream Hermes runtime
-
-- pinned on the VPS at tag `v2026.4.13`
-- pinned SHA `1af2e18d408a9dcc2c61d6fc1eef5c6667f8e254`
-- repo: `~/apps/hermes-agent`
-- home: `~/.hermes`
-- credential surface: `~/.hermes/.env`
-- execution backend: `~/.local/bin/hermes`
-
-### 2. local hermes-node wrapper
-
-- repo: `~/apps/hermes-node`
-- CLI: `./bin/hermes-node`
-- ledger: `state/hermes-node.db`
-- workspaces: `state/workspaces/{task_id}/`
-- wrapper logs: `logs/hermes-node.jsonl`
-
-### 3. future Temporal ingress
-
-Not implemented here.
-
-The intended next step is wrapper CLI ingress first, then a local-only API ingress later if needed.
-
-## Roadmap
-
-Canonical map: [docs/stack-evolution.md](docs/stack-evolution.md).
-Operator detail: [docs/operator-architecture.md](docs/operator-architecture.md).
-
-Where we are now:
-
-- upstream Hermes, Hermes-node membrane, operator, ingresses, repo
-  registry, Deep-Agents harness, specialists, Codex lane, and the
-  Temporal seam are all live
-- the architecture is structurally complete — we are no longer in
-  bootstrap mode
-- the current bottleneck is operator quality and specialist usefulness,
-  not architecture
-
-Next phases:
-
-1. **Next** — operator runtime strategy and specialist usefulness
-   (resident-local quality, remote escalation slot, reliable callable
-   specialists)
-2. **Then** — Codex lane hardening (manifests, receipts, durability,
-   sandbox envelope)
-3. **Then** — Temporal above Hermes-node for durable orchestration
-4. **Later** — selective autonomization of specialists (manifest
-   subscriptions flipped one at a time)
-5. **Later** — richer surfaces like a Mini App on top of operator +
-   Hermes-node, never on raw upstream Hermes
-
-Intentionally deferred: Temporal engine itself, specialist autonomy,
-TreasuryOS repo (future-slot only until it exists), broader upstream
-Hermes capabilities that haven't been wrapped by the membrane yet.
-
-Design rules:
-
-- operator thinks through Hermes-node, not around it
-- operator is substrate-native, not surface-native
-- governance propagates downward before autonomy does
-- durable state lives in workspaces, receipts, and session artifacts — not process memory
-- upstream Hermes capabilities become autonomous only after the membrane wraps them
-- specialists are bounded organs, not rogue daemons
-
-## Operator runtime
-
-Shared across ingresses — the same turn runtime powers the terminal REPL
-and the Telegram bot, and is what any future scheduler (Temporal) will
-call through. Details: [docs/phase3-runtime-and-temporal-seam.md](docs/phase3-runtime-and-temporal-seam.md).
-
-Key properties:
-
-- one grounded tool surface shared by every ingress
-- natural-language response synthesis on top of grounded tool results
-- action-completion guard against narration-without-action
-- backend policy with a resident-local slot primary and a remote
-  escalation slot available when needed
-- structured invoke seam returning approval / task / plan outcomes for
-  future schedulers — Temporal will consume this, not reimplement it
-
-## Supported task kinds
-
-`hermes-node` v0 supports only read-first task kinds:
-
-- `summary`
-- `research`
-- `repo_read`
-
-It does not support `repo_write` or shell mutation task classes by default.
-
-Guardrails:
-
-- `summary` uses non-destructive toolsets only
-- `research` uses web-oriented toolsets only
-- `repo_read` runs with the upstream `file` toolset and adds a strict read-only prompt preamble
-- `repo_read` uses `--worktree` automatically when the target path looks like a git checkout
-- no wrapper path enables `--yolo`
-
-## Repo-aware operator bundle
-
-The operator now has a read-only repo-awareness layer on top of the existing
-ledger, workspaces, and repo inspection tools.
-
-It can:
-
-- summarize repo structure and current branch/worktree state
-- summarize changed files and likely relevant files for a question
-- compare current repo state to the last successful hermes-node run
-- summarize recent workspaces and receipts for one repo
-- diagnose a failed task from its run/events/workspace trail
-- prepare a bounded patch proposal plan without mutating the repo
-
-This stays inside the same membrane:
-
-- no new ingress
-- no direct repo mutation
-- no bypass of ledger, approvals, routing, or workspaces
-
-## Ledger model
-
-The local SQLite ledger persists:
-
-- `tasks`
-- `runs`
-- `events`
-- `summaries`
-- `approvals`
-
-Each task row also persists `workspace_dir`.
-
-The wrapper also writes structured JSONL records to `logs/hermes-node.jsonl` and durable per-task artifacts under `state/workspaces/`.
-
-## File tree
-
-```text
-.
-├── .env.example
-├── README.md
-├── bin/
-│   └── hermes-node
-├── docs/
-│   ├── operator-ops.md
-│   ├── routing-policy.md
-│   ├── stack-evolution.md
-│   └── upstream-notes.md
-├── lib/
-│   └── hermes_node_ops/
-│       ├── __init__.py
-│       ├── cli.py
-│       ├── config.py
-│       ├── codex.py
-│       ├── jsonl.py
-│       ├── ledger.py
-│       ├── models.py
-│       ├── routing.py
-│       ├── workspaces.py
-│       └── wrapper.py
-├── logs/
-│   └── .gitkeep
-├── scripts/
-│   └── bootstrap_ubuntu_2404.sh
-├── state/
-│   └── .gitkeep
-├── systemd/
-│   └── hermes-node.service
-└── tests/
-    ├── test_codex.py
-    ├── test_config.py
-    ├── test_ledger.py
-    ├── test_routing.py
-    ├── test_workspaces.py
-    └── test_wrapper.py
-```
-
-## Configuration
-
-Wrapper configuration lives in `~/apps/hermes-node/.env`.
-
-Upstream Hermes secrets remain in `~/.hermes/.env`.
-
-Important wrapper settings:
-
-```dotenv
-HERMES_NODE_UPSTREAM_HOME=~/.hermes
-HERMES_NODE_UPSTREAM_REPO=~/apps/hermes-agent
-HERMES_NODE_HERMES_BIN=~/.local/bin/hermes
-HERMES_NODE_DB_PATH=state/hermes-node.db
-HERMES_NODE_LOG_JSONL=logs/hermes-node.jsonl
-HERMES_NODE_DEFAULT_PROVIDER=openrouter
-HERMES_NODE_DEFAULT_MODEL=openai/gpt-oss-20b:free
-HERMES_NODE_DEFAULT_MAX_TURNS=4
-HERMES_NODE_POLL_INTERVAL_SECONDS=15
-```
-
-Codex auth options:
-
-- `OPENAI_API_KEY` may live in `~/apps/hermes-node/.env`
-- or a cached `codex login` can be used directly
-- or `OPENROUTER_API_KEY` can stay in `~/.hermes/.env`; the wrapper will map Codex onto OpenRouter's OpenAI-compatible base URL for read-only repo tasks
-
-## CLI
-
-### submit
-
-Queue a task in the local ledger.
+Requires Python 3.10 or newer. No package installation, provider account,
+Hermes/Codex installation, or `.env` file is needed for the demonstration.
 
 ```bash
-./bin/hermes-node submit --kind summary --query "Reply with exactly: ALIVE"
-./bin/hermes-node submit --kind research --query "Summarize the latest OpenRouter quickstart flow"
-./bin/hermes-node submit --kind repo_read --repo ~/apps/hermes-node --query "Describe the ledger schema"
-./bin/hermes-node submit --kind research --query "Review this plan" --require-approval
+python3 scripts/offline_demo.py
 ```
 
-Optional overrides:
+The demo uses the real SQLite ledger, approval gate, retry handling, queue
+selection, and receipt writers with a **deterministic fake provider**. It:
 
-- `--provider`
-- `--model`
-- `--max-turns`
-- `--title`
-- `--created-by`
-- `--run-now`
-- `--json`
+1. Stores a synthetic task and verifies execution is blocked before approval.
+2. Records a simulated reviewer approval.
+3. Injects a fake rate-limit response and preserves the deferred task.
+4. Closes and reopens the database to verify persistence.
+5. Retries through the queue and records a scripted successful result.
 
-### run
+It prints the path to a new temporary artifact directory. Inspect
+`demo-summary.json`, the SQLite database, input, stdout/stderr, and both run
+receipts there. Every result identifies the mock execution mode. No network
+request, external process, or real repository action occurs.
 
-Run one queued task, or stay in a worker loop.
+[Demo walkthrough and limits](docs/demo.md)
+
+## What is implemented
+
+| Component | Behavior in this repository |
+|---|---|
+| Task ledger | SQLite records tasks, attempts, approvals, events, summaries, and provider cooldowns |
+| Execution wrapper | Routes bounded work to Hermes or Codex and writes per-run output and receipts |
+| Repository actions | Read-only inspection and approval-required changes on named feature branches |
+| Recovery | Rate-limit deferral with exponential backoff, attempt limits, and queue polling |
+| Operator | A tool-using conversational layer with persisted session history and project context |
+| Planning tools | File-backed plans, todos, scratchpads, and callable read-only specialists |
+| Interfaces | Terminal REPL and an allowlisted Telegram adapter share the operator's tool surface |
+| Evaluation | A small prompt harness records tool choice, latency, errors, and output for manual inspection |
+
+The normal flow is: an interface invokes the operator; the operator submits
+bounded tasks through the ledger; the wrapper selects an executor; results are
+stored as receipts and artifacts for inspection. A persistent queue worker
+processes submitted tasks.
+
+### Implemented, simulated, and planned
+
+| Status | Scope |
+|---|---|
+| Implemented in code | Ledger, routing, sessions, provider adapters, repository tooling, Telegram ingress, and callable specialists |
+| Exercised by the offline demo | Approval enforcement, task persistence across database reopen, a simulated rate-limit retry, and retained run receipts |
+| Historical development checks | April 2026 Hermes/provider proof of life and experiments with operator tool selection; historical records only |
+| Current validation limit | No real repository task has been completed yet. Current uptime, sustained autonomous operation, production reliability, and customer impact remain unvalidated |
+| Planned | Temporal orchestration, event-triggered specialist autonomy, and broader unattended workflows; trigger subscriptions remain disabled |
+
+The next milestone is one bounded real repository task completed end to end:
+inspect the repository, propose a change, obtain approval, execute it, and review
+the resulting diff and receipt. Then repeat across representative tasks, recording
+failures, human interventions, and outcomes before expanding unattended operation.
+
+## Reliability work
+
+The development history contains concrete failures and corresponding changes:
+
+- The operator described actions without calling tools. Prompt and runtime
+  checks were added to encourage execution before reporting completion.
+- Overlapping tool descriptions led to incorrect selections. Descriptions and
+  accepted evaluation-tool matches were refined.
+- Models supplied repository aliases or invented placeholder paths where tools
+  expected actual paths. Registry-backed argument resolution was added.
+- A seven-prompt evaluation run could appear to pass while the final answer
+  still asserted unsupported repository state. That prompted closer output
+  inspection and a resolver fix.
+
+The [evaluation harness](scripts/operator_bakeoff.py) is deliberately small and
+uses heuristic checks. A passing score is not a factuality guarantee. Unlike the
+offline demo, running the bakeoff requires an explicitly configured model backend.
+
+## Tests
 
 ```bash
-./bin/hermes-node run
-./bin/hermes-node run --task-id task_...
-./bin/hermes-node run --watch --poll-interval 15
-./bin/hermes-node run --approve task_... --actor ubuntu
+python3 -m unittest discover -s tests -v
 ```
 
-Approval note:
+The suite uses mocks and local temporary files/repositories; no live provider
+credentials are required. Git is needed for repository fixtures. If your local
+Git installation has no author identity, set test-only `GIT_AUTHOR_NAME`,
+`GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and `GIT_COMMITTER_EMAIL` in the command's
+environment. The CI workflow supplies these only for its test process.
 
-- `submit --require-approval` queues a task in `pending_approval`
-- `run --approve task_...` records a granted approval and can immediately execute that task
+Run only the demonstration checks:
 
-### status
+```bash
+python3 -m unittest discover -s tests -p 'test_offline_demo.py' -v
+```
 
-Inspect queue state, recent runs, approvals, and task details.
+Unit tests exercise implementation behavior and failure cases with mocked
+provider boundaries.
+
+## Optional live setup
+
+Live execution requires your own installed executor, provider configuration, and
+test repository. Check compatibility with your installed CLI versions; historical
+deployment notes describe the April 2026 development setup.
+
+1. Install and configure upstream Hermes separately; this repository does not
+   vendor or reinstall it.
+2. Copy `.env.example` to `.env` and set local paths and provider/model values.
+3. Configure the Codex CLI if you want its repository-execution route.
+4. Inspect `config/repos.json` and register only repositories you intend to use.
+5. Start with bounded read-only tasks and inspect their outputs and receipts.
+
+Useful commands after that setup:
 
 ```bash
 ./bin/hermes-node status
-./bin/hermes-node status --task-id task_...
-./bin/hermes-node status --json
-```
-
-### summarize
-
-Show the latest stored summary for a task or run.
-
-```bash
+./bin/hermes-node route --kind repo_read
+./bin/hermes-node submit --kind summary --query "Reply with exactly: ALIVE"
+./bin/hermes-node run
 ./bin/hermes-node summarize
-./bin/hermes-node summarize --task-id task_...
-./bin/hermes-node summarize --run-id run_...
-```
-
-### workspace
-
-Inspect the durable workspace for a task, or list known workspaces.
-
-```bash
 ./bin/hermes-node workspace
-./bin/hermes-node workspace --task-id task_...
-./bin/hermes-node workspace --task-id task_... --json
 ```
 
-Each task workspace contains:
+`run --watch` polls the persistent queue. The provided systemd units are optional
+deployment templates; adapt their user, paths, and environment before use.
 
-```text
-state/workspaces/{task_id}/
-├── input.md
-├── notes/
-├── runs/
-│   └── {run_id}/
-│       ├── receipt.json
-│       ├── stderr.txt
-│       └── stdout.txt
-└── worktree.json
-```
+### Task routes
 
-## systemd unit
+| Task kind | Default executor | Intended scope |
+|---|---|---|
+| `summary` | Hermes | Bounded summarization |
+| `research` | Hermes | Web-oriented research |
+| `repo_read` | Codex, with Hermes fallback | Repository inspection |
+| `repo_patch_branch` | Codex | Approval-required changes on a named branch |
 
-The worker unit lives in [systemd/hermes-node.service](/Users/amarmurray/Documents/autodev/ops/hermes-node/systemd/hermes-node.service).
+The [routing policy](lib/hermes_node_ops/routing.py) is the source of truth for
+executor selection. The [Codex adapter](lib/hermes_node_ops/codex.py) refuses
+writable execution on `main` and `master`. These are application controls, not a
+complete security boundary; do not treat the prototype as a hardened sandbox
+for untrusted users or repositories.
 
-It runs:
+## Project map
 
-```text
-/home/ubuntu/apps/hermes-node/bin/hermes-node run --watch --poll-interval 15
-```
+| Path | Purpose |
+|---|---|
+| `scripts/offline_demo.py` | Standalone synthetic lifecycle demonstration |
+| `lib/hermes_node_ops/ledger.py` | Durable task and approval state |
+| `lib/hermes_node_ops/wrapper.py` | Execution, retry handling, and artifact bookkeeping |
+| `lib/hermes_node_ops/codex.py` | Codex CLI integration |
+| `lib/hermes_node_ops/operator/` | Sessions, tools, backend policy, plans, and interfaces |
+| `scripts/operator_bakeoff.py` | Small live-backend evaluation harness |
+| `tests/` | Offline unit and integration checks |
+| `docs/` | Architecture, operating notes, and demo details |
 
-Install on the VPS:
+Further reading: [stack roadmap](docs/stack-evolution.md),
+[operator architecture](docs/operator-architecture.md),
+[Telegram interface](docs/operator-telegram.md), and
+[operating notes](docs/operator-ops.md).
 
-```bash
-cd ~/apps/hermes-node
-sudo install -m 0644 systemd/hermes-node.service /etc/systemd/system/hermes-node.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now hermes-node.service
-sudo systemctl status hermes-node.service
-```
+## Attribution
 
-This service does not expose a public port.
-
-## Migration / bootstrap on the VPS
-
-This wrapper assumes upstream Hermes is already installed and working.
-
-Current VPS facts:
-
-- upstream Hermes repo: `~/apps/hermes-agent`
-- upstream Hermes home: `~/.hermes`
-- OpenRouter credential already configured in `~/.hermes/.env`
-
-Bootstrap the wrapper:
-
-```bash
-cd ~/apps
-git clone https://github.com/amarmurray/hermes-node.git
-cd ~/apps/hermes-node
-cp .env.example .env
-./scripts/bootstrap_ubuntu_2404.sh
-```
-
-The bootstrap script does not reinstall upstream Hermes. It verifies the upstream binary, prepares wrapper state directories, and optionally installs the worker unit.
-
-## Exact VPS verification commands
-
-Run these on the VPS after pulling this repo:
-
-```bash
-cd ~/apps/hermes-node
-python3 -m unittest discover -s tests -v
-bash -n scripts/bootstrap_ubuntu_2404.sh
-./bin/hermes-node status
-./bin/hermes-node submit --kind summary --query "Reply with exactly: ALIVE"
-./bin/hermes-node run
-./bin/hermes-node summarize
-./bin/hermes-node workspace --task-id task_...
-```
-
-Expected shape:
-
-- `status` shows the local ledger counts
-- `submit` creates a `task_...`
-- `run` creates a `run_...` and calls upstream `hermes chat`
-- `summarize` prints the stored summary from the completed run
-
-## Local development tests
-
-Run:
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-The test suite covers:
-
-- env/config loading
-- ledger creation and approvals
-- upstream command construction
-- run execution bookkeeping
-- summary extraction
-
-## Notes
-
-- Upstream proof-of-life remains recorded in [docs/upstream-notes.md](/Users/amarmurray/Documents/autodev/ops/hermes-node/docs/upstream-notes.md).
-- `hermes-node` uses the upstream Hermes CLI as its only execution backend.
-- Temporal is intentionally out of scope for this v0.
+This project builds on [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+and uses the [Codex CLI](https://github.com/openai/codex) as an optional execution
+backend. It is an independent personal project and is not affiliated with those
+projects. The commit history records AI-assisted implementation. Underlying
+models, runtimes, and services remain separate projects with their own terms.
