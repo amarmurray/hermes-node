@@ -1,40 +1,41 @@
 # Stack evolution
 
-Canonical topology and roadmap for `hermes-node`. This is the map —
-everything else (README, operator-architecture, phase docs) defers to
-this file for the big picture.
+Architecture and roadmap for `hermes-node`. This document distinguishes the
+implemented components from the extensions planned around them. See the
+[README status matrix](../README.md#implemented-simulated-and-planned) for current
+validation status and the [offline demo](demo.md) for a reproducible check.
 
 ## Where we are now
 
-The architecture is structurally real. We are no longer in bootstrap mode.
+Implemented components:
 
-Live today:
-
-- upstream Hermes runtime substrate on the VPS
+- an adapter around the separately installed upstream Hermes runtime
 - Hermes-node constitutional membrane (ledger, routing, approvals, workspaces, receipts)
 - resident cognitive operator on top of Hermes-node
 - terminal REPL and Telegram as ingresses into the same operator
 - Deep-Agents-style harness layered into the operator (plans, scratchpads, todos, callable specialists)
 - Codex as an execution lane behind Hermes-node
-- repo registry with live entries for `hermes-node` and `ixion`
+- a repo registry for explicitly configured local checkouts
 - Temporal seam (invocation + outcome shapes) without Temporal itself
 - trigger manifest scaffolding (all subscriptions disabled)
 
-The current bottleneck is **operator usefulness / cognition**, not
-architecture. Local operator quality is the constraint, not the
-substrate's existence.
+April 2026 development records describe a VPS setup, minimal provider proof of
+life, and experiments with a local operator model. These are historical checks.
+The author has not yet completed a real repository task through this stack.
+
+The current offline demonstration verifies approval enforcement, persisted task
+state, a simulated rate-limit retry, and retained receipts using a deterministic
+fake provider. The next validation milestone is a bounded real repository task:
+inspection, proposed change, approval, execution, and independent review of the
+diff and receipt. Repeated tasks should then establish which failures and human
+interventions need further work.
 
 ## Current topology
 
-```
-Human
-  → ingresses (terminal REPL, Telegram)
-  → operator (resident cognitive foreman)
-  → Hermes-node (membrane: ledger / routing / approvals / workspaces / receipts)
-  → executors (Codex lane, Hermes/OpenRouter, later Claude, later specialists)
-  → artifacts (workspaces, receipts, session plans, notes, subagent reports)
-  → operator reads back → reports to human
-```
+Terminal or Telegram input reaches the shared operator. The operator inspects
+state and submits work through Hermes-node's ledger, routing, and approval
+interfaces. Executors produce workspace artifacts and receipts, which the
+operator can inspect to report results to the user.
 
 - Upstream Hermes: runtime substrate
 - Hermes-node: constitutional membrane
@@ -85,13 +86,17 @@ The work is a ladder, not a fan. Each phase unlocks the next.
 - specialist suboperators become bounded organs, not rogue daemons
 - every ingress shares the same operator turn runtime; surfaces never branch into their own control plane
 
-## Repo / domain status
+## Development integration record
 
-| Repo | Role | Status |
+The target names below come from the April 2026 development configuration.
+Registry entries identify intended checkouts; successful task execution is
+tracked separately through run records.
+
+| Repo | Role | Recorded scope |
 |---|---|---|
-| `hermes-node` | substrate + operator (this repo) | live |
-| `hermes-agent` (upstream) | Hermes runtime | live, pinned on VPS |
-| `ixion` / `robotics-vp-core` | robotics VP core | live on VPS |
+| `hermes-node` | substrate + operator (this repo) | implemented code and reproducible offline demo |
+| `hermes-agent` (upstream) | Hermes runtime | pinned VPS setup and minimal April proof-of-life check |
+| `ixion` / `robotics-vp-core` | robotics VP core | configured repository target; real task completion unvalidated |
 | `treasuryos` | future product | future-slot only, no path yet |
 
 New repos are added to `future_slots` in the registry until they have a
@@ -131,7 +136,9 @@ real path, then promoted into `repos`.
 - durable orchestration and scheduling above Hermes-node
 - consumes the invoke seam, does not reimplement the membrane
 
-## Completed phases (for context)
+## Implementation milestones (April 2026)
+
+These labels describe code increments in the development history.
 
 - v0.5 Telegram ingress
 - v0.6 Deep-Agents-style operator harness
